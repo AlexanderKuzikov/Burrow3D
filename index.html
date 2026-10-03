@@ -1,0 +1,1281 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Burrow3D — генератор 3D-карт местности</title>
+<style>
+  :root{
+    --panel: rgba(10,14,18,.60);
+    --line: rgba(255,255,255,.12);
+    --txt: #e9eff4;
+    --dim: #8fa0ad;
+    --acc: #6fc3ff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#070a0d;overflow:hidden;color:var(--txt);
+    font:13px/1.45 "Inter",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  canvas#scene{position:fixed;inset:0;display:block;touch-action:none}
+
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:2;
+    background:radial-gradient(ellipse 80% 80% at 50% 46%,rgba(0,0,0,0) 44%,rgba(0,0,0,.28) 78%,rgba(0,0,0,.52) 100%)}
+
+  .glass{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+    box-shadow:0 10px 34px rgba(0,0,0,.42)}
+
+  /* ── левая колонка ── */
+  #left{position:fixed;top:14px;left:14px;bottom:14px;z-index:5;width:274px;
+    display:flex;flex-direction:column;gap:10px;pointer-events:none}
+  #left > *{pointer-events:auto}
+
+  #bar{padding:10px 11px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  #bar .grow{flex:1 1 auto}
+  #bar .name{width:100%;font-size:12.5px;font-weight:600;letter-spacing:.2px;
+    display:flex;align-items:baseline;gap:7px}
+  #bar .name em{font-style:normal;color:var(--acc);font-weight:500}
+  #bar .name span{color:var(--dim);font-weight:400;font-size:11px;margin-left:auto}
+
+  #panel{padding:11px 12px 12px;overflow:auto;max-height:52vh}
+  #panel h2{margin:0 0 6px;font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);font-weight:600}
+  #panel section + section{margin-top:11px;padding-top:10px;border-top:1px solid var(--line)}
+  #note{color:var(--dim);font-size:11.5px}
+
+  .legend{display:flex;flex-direction:column;gap:5px}
+  .legend label{display:flex;align-items:center;gap:7px;font-size:12px}
+  .legend .pc{margin-left:auto;color:var(--dim);font-variant-numeric:tabular-nums;font-size:11px}
+  .legend select{flex:0 0 auto;min-width:34px;text-align:center}
+
+  .btns{display:flex;flex-wrap:wrap;gap:6px}
+  button,select{font:inherit;font-size:11.5px;color:var(--txt);cursor:pointer;
+    background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:999px;
+    padding:5px 10px;transition:.15s background,.15s border-color,.15s color}
+  button:hover,select:hover{background:rgba(255,255,255,.14)}
+  button.on{background:rgba(111,195,255,.20);border-color:rgba(111,195,255,.55);color:#dff1ff}
+  select{padding:5px 8px}
+  select option{background:#131a20;color:var(--txt)}
+  .filebtn{position:relative;overflow:hidden}
+  .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+
+  .keys{color:var(--dim);font-size:11.5px}
+  .keys b{color:#cfdae2;font-weight:600}
+  kbd{background:rgba(255,255,255,.09);border:1px solid var(--line);border-radius:5px;
+    padding:0 4px;font:inherit;font-size:10.5px;color:#dbe5ec}
+
+  #mm{margin-top:auto;padding:9px}
+  #mm canvas{display:block;width:180px;height:180px;border-radius:7px;
+    image-rendering:pixelated;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);cursor:crosshair}
+  #mm .cap{margin-top:6px;color:var(--dim);font-size:10.5px;text-align:center}
+
+  /* ── углы ── */
+  #hint{position:fixed;right:14px;bottom:14px;z-index:5;padding:9px 13px;color:var(--dim);font-size:11.5px}
+  #hint b{color:#cfdae2;font-weight:600}
+  #fps{position:fixed;top:14px;right:14px;z-index:5;padding:6px 11px;font-size:11.5px;
+    color:var(--dim);font-variant-numeric:tabular-nums}
+  #fps b{color:#cfdae2;font-weight:600}
+  #stat{position:fixed;top:14px;right:96px;z-index:5;padding:6px 11px;font-size:11.5px;
+    color:var(--dim);font-variant-numeric:tabular-nums}
+
+  /* ── оверлеи ── */
+  #drop{position:fixed;inset:0;z-index:15;display:none;align-items:center;justify-content:center;
+    background:rgba(7,12,18,.82);backdrop-filter:blur(3px)}
+  #drop.on{display:flex}
+  #drop div{padding:26px 40px;border:2px dashed rgba(111,195,255,.6);border-radius:18px;
+    text-align:center;font-size:15px}
+  #drop small{display:block;color:var(--dim);font-size:12px;margin-top:6px}
+
+  #loader{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:16px;background:#070a0d;transition:opacity .5s}
+  #loader.gone{opacity:0;pointer-events:none}
+  .spin{width:34px;height:34px;border:2px solid rgba(255,255,255,.14);
+    border-top-color:var(--acc);border-radius:50%;animation:sp 900ms linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  #loader p{margin:0;color:var(--dim);font-size:12.5px;text-align:center;max-width:460px}
+  #loader p b{color:var(--txt)}
+  #loader p.err b{color:#ff9a8a}
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+<div id="vignette"></div>
+
+<div id="left">
+  <div id="bar" class="glass">
+    <div class="name"><em>Burrow3D</em><span id="mapmeta">—</span></div>
+    <label class="filebtn">Загрузить .json<input type="file" id="file" accept=".json,application/json"></label>
+    <select id="selMap" title="Встроенные карты"></select>
+    <select id="selBiome" title="Набор объектов"></select>
+    <button id="bSave" class="grow" title="Скачать карту с текущей легендой">Сохранить</button>
+  </div>
+
+  <div id="panel" class="glass">
+    <section>
+      <h2>Легенда карты</h2>
+      <div class="legend">
+        <label>Свободная <select class="lsel" data-t="0"></select><span class="pc" id="pc0">—</span></label>
+        <label>Дорога <select class="lsel" data-t="1"></select><span class="pc" id="pc1">—</span></label>
+        <label>Занятая <select class="lsel" data-t="2"></select><span class="pc" id="pc2">—</span></label>
+      </div>
+      <div id="note" style="margin-top:7px"></div>
+    </section>
+    <section>
+      <h2>Слои</h2>
+      <div class="btns">
+        <button id="bPlants" class="on">Растительность</button>
+        <button id="bRocks" class="on">Камни</button>
+        <button id="bProps" class="on">Декор</button>
+        <button id="bShadow" class="on">Тени</button>
+        <button id="bFree">Свободная камера</button>
+        <button id="bReset">Сброс вида</button>
+      </div>
+    </section>
+    <section>
+      <h2>Набор</h2>
+      <div id="note2" style="color:var(--dim);font-size:11.5px"></div>
+      <div class="keys" style="margin-top:8px">
+        <b>ЛКМ</b> вращать · <b>ПКМ</b> тянуть · <b>колесо</b> зум<br>
+        fly: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <kbd>Space</kbd>/<kbd>C</kbd> вверх-вниз,
+        <kbd>Shift</kbd> быстрее<br>
+        <b>F</b> fly · <b>R</b> сброс · <b>H</b> панель · карта — перетащи в окно
+      </div>
+    </section>
+  </div>
+
+  <div id="mm" class="glass">
+    <canvas id="mmc" width="96" height="96"></canvas>
+    <div class="cap">карта · клик — перейти</div>
+  </div>
+</div>
+
+<div id="hint" class="glass">
+  <b>ЛКМ</b> — вращать &nbsp; <b>ПКМ</b> — тянуть &nbsp; <b>колесо</b> — зум
+</div>
+<div id="stat" class="glass">—</div>
+<div id="fps" class="glass"><b>—</b> fps</div>
+
+<div id="drop"><div>Отпустите карту здесь<small>JSON: {name, width, height, grid:[строки]}</small></div></div>
+
+<div id="loader">
+  <div class="spin"></div>
+  <p id="lmsg">Генерация местности…</p>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script>
+window.__MAP_READY = false;
+setTimeout(function () {
+  if (window.__MAP_READY) return;
+  var p = document.getElementById('lmsg');
+  if (p) { p.className = 'err';
+    p.innerHTML = '<b>Three.js не загрузился с CDN.</b><br>Нужен доступ в интернет к cdn.jsdelivr.net — при первом открытии браузер скачивает библиотеку (~600 КБ).'; }
+}, 9000);
+</script>
+
+<script src="maps.js"></script>
+<script src="biomes.js"></script>
+
+<script type="module">
+import * as T from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const DEMO = window.DEMO_MAPS || [];
+const BIOMES = window.BIOMES || {};
+const BIOME_KEYS = Object.keys(BIOMES);
+
+/* ══════════════════════════ 1. утилиты ══════════════════════════ */
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const FREE = 0, ROAD = 1, BLOCKED = 2;
+const TYPE_NAME = ['Свободная', 'Дорога', 'Занятая'];
+const OUT_GLYPH = ['.', '#', 'X'];
+
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function makeNoise(seed) {
+  const rnd = mulberry32(seed);
+  const P = new Float32Array(256 * 256);
+  for (let i = 0; i < P.length; i++) P[i] = rnd();
+  const sm = t => t * t * (3 - 2 * t);
+  return function (x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const u = sm(x - xi), v = sm(y - yi);
+    const X = xi & 255, Y = yi & 255, X1 = (xi + 1) & 255, Y1 = (yi + 1) & 255;
+    const r0 = Y << 8, r1 = Y1 << 8;
+    const a = P[r0 | X], b = P[r0 | X1], c = P[r1 | X], d = P[r1 | X1];
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  };
+}
+const noise = makeNoise(20261003);
+function fbm(x, y, oct) {
+  let s = 0, a = 0.5, f = 1, norm = 0;
+  for (let i = 0; i < oct; i++) { s += a * noise(x * f, y * f); norm += a; a *= 0.5; f *= 2.03; }
+  return s / norm;
+}
+/* гребни строим пооктавно: усреднённый fbm слишком узкий (≈0.45..0.55),
+   и 1-|2n-1| на нём даёт почти константу — плато вместо гор */
+function fbmRidged(x, y, oct) {
+  let s = 0, a = 0.5, f = 1, norm = 0, prev = 1;
+  for (let i = 0; i < oct; i++) {
+    let n = 1 - Math.abs(noise(x * f, y * f) * 2 - 1);
+    n *= n; n *= prev; prev = clamp(n * 1.6, 0, 1);
+    s += a * n; norm += a; a *= 0.5; f *= 2.07;
+  }
+  return Math.pow(s / norm, 1.3);
+}
+
+function mixHex(a, b, t) {
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  return (Math.round(lerp(ar, br, t)) << 16) | (Math.round(lerp(ag, bg, t)) << 8) | Math.round(lerp(ab, bb, t));
+}
+
+/* three r169 убрал Material.defaultAttributeValues: без явного атрибута 'color'
+   он читается как (0,0,0), и instanceColor гасится до нуля. */
+function whiteColors(geo) {
+  const n = geo.attributes.position.count;
+  geo.setAttribute('color', new T.BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+  return geo;
+}
+function at(geo, o) {
+  o = o || {};
+  if (o.sx || o.sy || o.sz) geo.scale(o.sx || 1, o.sy || 1, o.sz || 1);
+  if (o.rx) geo.rotateX(o.rx);
+  if (o.ry) geo.rotateY(o.ry);
+  if (o.rz) geo.rotateZ(o.rz);
+  if (o.x || o.y || o.z) geo.translate(o.x || 0, o.y || 0, o.z || 0);
+  return geo;
+}
+function mergeAll(list) {
+  const g = mergeGeometries(list, false);
+  g.computeVertexNormals();
+  return whiteColors(g);
+}
+
+/* ══════════════════════════ 2. объекты ══════════════════════════
+   Каждый builders — набор «частей». Часть = своя геометрия + свой цвет,
+   на каждую часть делается один InstancedMesh. `id` нужен, чтобы набор
+   (биом) мог переопределить цвет конкретной части.                      */
+
+const G = {
+  cyl: (rt, rb, h, s) => whiteColors(new T.CylinderGeometry(rt, rb, h, s)),
+  cone: (r, h, s) => whiteColors(new T.ConeGeometry(r, h, s)),
+  ico: (r, d) => whiteColors(new T.IcosahedronGeometry(r, d)),
+  dodeca: (r) => whiteColors(new T.DodecahedronGeometry(r, 0)),
+  octa: (r) => whiteColors(new T.OctahedronGeometry(r, 0)),
+  sph: (r, w, h) => whiteColors(new T.SphereGeometry(r, w, h)),
+  torus: (r, t, s) => whiteColors(new T.TorusGeometry(r, t, 5, s)),
+  hex: (r, h) => whiteColors(new T.CylinderGeometry(r, r, h, 6)),
+};
+
+const BUILDERS = {
+  conifer: {
+    parts: [
+      { id: 'trunk', geo: G.cyl(0.10, 0.19, 1.7, 6), y: 0, color: 0x5d4028, rough: 0.95 },
+      { id: 'low', geo: G.cone(1.22, 2.7, 7), y: 0, color: 0x2f6b28, rough: 0.85 },
+      { id: 'top', geo: G.cone(0.82, 2.3, 7), y: 0, color: 0x3a7d2c, rough: 0.85 },
+    ],
+    offset: { trunk: [0, 0.85], low: [0, 2.05], top: [0, 3.6] },
+  },
+  pine: {
+    parts: [
+      { id: 'trunk', geo: G.cyl(0.08, 0.15, 2.2, 6), color: 0x4a3320, rough: 0.95 },
+      { id: 'low', geo: mergeAll([at(G.cone(1.05, 2.3, 6), { y: 1.15 })]), color: 0x2c5a3a, rough: 0.85 },
+      { id: 'mid', geo: at(G.cone(0.78, 2.2, 6), { y: 2.5 }), color: 0x336641, rough: 0.85 },
+      { id: 'top', geo: at(G.cone(0.5, 2.0, 6), { y: 3.9 }), color: 0x3c7049, rough: 0.85 },
+    ],
+  },
+  broadleaf: {
+    parts: [
+      { id: 'trunk', geo: G.cyl(0.12, 0.22, 2.0, 6), color: 0x54391f, rough: 0.95 },
+      { id: 'crown', geo: at(G.ico(1.15, 0), { y: 2.6, sy: 0.86 }), color: 0x3d7a24, rough: 0.85 },
+      { id: 'crown2', geo: at(G.ico(0.78, 0), { x: 0.5, y: 3.5, z: -0.3, sy: 0.9 }), color: 0x4e8f2c, rough: 0.85 },
+    ],
+    offset: { trunk: [0, 1.0] },
+  },
+  cactus: {
+    parts: [
+      { id: 'body', geo: at(G.cyl(0.3, 0.34, 2.8, 9), { y: 1.4 }), color: 0x3f7a4a, rough: 0.8 },
+      { id: 'arm', geo: mergeAll([
+        at(G.cyl(0.16, 0.18, 1.3, 7), { y: 0.65 }),
+        at(G.cyl(0.16, 0.18, 1.1, 7), { y: 1.75 }),
+      ]), color: 0x3a7044, rough: 0.8 },
+    ],
+    offset: { arm: [0.62, 1.5, 0, 0, 0, -0.75] },
+  },
+  deadTree: {
+    parts: [
+      { id: 'wood', color: 0x6b563a, rough: 0.95, geo: mergeAll([
+        at(G.cyl(0.09, 0.2, 2.8, 6), { y: 1.4 }),
+        at(G.cyl(0.06, 0.08, 1.3, 5), { x: 0.3, y: 2.3, rz: -0.9 }),
+        at(G.cyl(0.06, 0.08, 1.1, 5), { x: -0.28, y: 2.6, rz: 1.0 }),
+        at(G.cyl(0.05, 0.07, 0.9, 5), { x: 0.1, y: 3.1, rx: 0.8 }),
+      ]) },
+    ],
+  },
+  boulder: {
+    parts: [
+      { id: 'rock', color: 0x7d7d78, rough: 0.92, geo: mergeAll([
+        at(G.dodeca(0.8), { y: 0.5, sy: 0.8 }),
+        at(G.dodeca(0.5), { x: 0.7, y: 0.3, z: 0.35 }),
+        at(G.dodeca(0.38), { x: -0.6, y: 0.24, z: -0.4 }),
+      ]) },
+    ],
+  },
+  pebble: {
+    parts: [{ id: 'rock', geo: G.dodeca(0.34), color: 0x8a8a84, rough: 0.9 }],
+  },
+  tuft: {
+    parts: [
+      { id: 'blade', color: 0x4f8a2c, rough: 1, geo: mergeAll([
+        at(G.cone(0.1, 0.62, 4), { y: 0.31 }),
+        at(G.cone(0.09, 0.48, 4), { x: 0.14, y: 0.24, rz: 0.28 }),
+        at(G.cone(0.09, 0.5, 4), { x: -0.13, y: 0.25, rz: -0.3 }),
+      ]) },
+    ],
+  },
+  reed: {
+    parts: [
+      { id: 'stalk', color: 0x6f8a3a, rough: 1, geo: mergeAll([
+        at(G.cone(0.055, 1.5, 4), { y: 0.75 }),
+        at(G.cone(0.05, 1.2, 4), { x: 0.12, y: 0.6, rz: 0.16 }),
+        at(G.cone(0.05, 1.35, 4), { x: -0.11, y: 0.68, rz: -0.14 }),
+        at(G.cone(0.045, 1.0, 4), { x: 0.05, z: -0.14, y: 0.5, rx: 0.12 }),
+      ]) },
+    ],
+  },
+  scrub: {
+    parts: [
+      { id: 'bush', color: 0x8a7a45, rough: 1, geo: mergeAll([
+        at(G.ico(0.36, 0), { y: 0.3, sy: 0.8 }),
+        at(G.ico(0.26, 0), { x: 0.3, y: 0.22, z: 0.12 }),
+        at(G.ico(0.22, 0), { x: -0.26, y: 0.2, z: -0.18 }),
+      ]) },
+    ],
+  },
+  mushroom: {
+    parts: [
+      { id: 'stem', geo: at(G.cyl(0.11, 0.15, 0.7, 7), { y: 0.35 }), color: 0xd9e8bf, rough: 0.9 },
+      { id: 'cap', geo: at(G.sph(0.42, 9, 6), { y: 0.74, sy: 0.55 }), color: 0xd06a9a, rough: 0.7,
+        emissive: 0x8a2a6a, emissiveI: 0.7 },
+    ],
+  },
+  giantMushroom: {
+    parts: [
+      { id: 'stem', geo: at(G.cyl(0.34, 0.46, 2.3, 9), { y: 1.15 }), color: 0xbfd8a0, rough: 0.9 },
+      { id: 'cap', geo: at(G.sph(1.25, 11, 7), { y: 2.5, sy: 0.5 }), color: 0xc05a8a, rough: 0.65,
+        emissive: 0x6a1a4a, emissiveI: 0.8 },
+      { id: 'gills', geo: at(G.cyl(1.05, 1.05, 0.07, 12), { y: 2.26 }), color: 0xffd0a0, rough: 0.5,
+        emissive: 0xff9a50, emissiveI: 1.6 },
+    ],
+  },
+  crystal: {
+    parts: [
+      { id: 'shard', color: 0xd9a0ff, rough: 0.25, geo: mergeAll([
+        at(G.octa(0.42), { y: 0.55, sy: 1.5 }),
+        at(G.octa(0.26), { x: 0.34, y: 0.3, rz: 0.4 }),
+        at(G.octa(0.2), { x: -0.28, y: 0.24, z: 0.16, rz: -0.3 }),
+      ]), emissive: 0x7a3ab0, emissiveI: 0.9 },
+    ],
+  },
+  iceSpike: {
+    parts: [
+      { id: 'spike', color: 0x9fd0ea, rough: 0.18, geo: mergeAll([
+        at(G.cone(0.36, 3.2, 5), { y: 1.6 }),
+        at(G.cone(0.2, 1.7, 5), { x: 0.3, y: 0.85, rz: 0.16 }),
+        at(G.cone(0.15, 1.2, 5), { x: -0.24, y: 0.6, z: 0.2, rz: -0.2 }),
+      ]) },
+    ],
+  },
+  drift: {
+    parts: [
+      { id: 'snow', geo: at(G.sph(1.15, 12, 6), { y: 0.04, sy: 0.16 }), color: 0xf2f8ff, rough: 0.95 },
+    ],
+  },
+  basalt: {
+    parts: [
+      { id: 'column', color: 0x4a3a34, rough: 0.95, geo: mergeAll([
+        at(G.hex(0.42, 3.0), { y: 1.5 }),
+        at(G.hex(0.3, 1.9), { x: 0.5, y: 0.95, rz: 0.05 }),
+        at(G.hex(0.24, 2.4), { x: -0.42, y: 1.2, z: 0.2 }),
+      ]) },
+    ],
+  },
+  vent: {
+    parts: [
+      { id: 'ring', geo: at(G.torus(0.7, 0.26, 9), { y: 0.2, rx: Math.PI / 2 }), color: 0x3a2f2a, rough: 0.95 },
+      { id: 'lava', geo: at(G.cone(0.5, 0.5, 8), { y: 0.34 }), color: 0xff7a2a, rough: 0.4,
+        emissive: 0xff5a10, emissiveI: 2.4 },
+    ],
+  },
+  lily: {
+    parts: [
+      { id: 'pad', color: 0x3f7f4a, rough: 0.7, geo: mergeAll([
+        at(G.cyl(0.55, 0.5, 0.09, 10), { y: 0.05 }),
+        at(G.cone(0.2, 0.7, 6), { y: 0.4 }),
+      ]) },
+    ],
+  },
+  spore: {
+    parts: [
+      { id: 'ball', geo: G.ico(0.16, 1), color: 0xa0ffd0, rough: 0.4, noShadow: true,
+        emissive: 0x40ffa0, emissiveI: 1.8, float: [1.0, 2.6] },
+    ],
+  },
+};
+
+/* ══════════════════════════ 3. renderer / сцена ══════════════════════════ */
+
+const canvas = document.getElementById('scene');
+let renderer;
+try {
+  renderer = new T.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+} catch (err) {
+  fatal('WebGL недоступен', err.message);
+  throw err;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = T.SRGBColorSpace;
+renderer.toneMapping = T.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = T.PCFSoftShadowMap;
+
+const scene = new T.Scene();
+const camera = new T.PerspectiveCamera(55, innerWidth / innerHeight, 0.5, 4000);
+
+const skyMat = new T.ShaderMaterial({
+  side: T.BackSide, depthWrite: false, fog: false,
+  uniforms: {
+    top: { value: new T.Color() }, bottom: { value: new T.Color() },
+    sun: { value: new T.Color() }, sunDir: { value: new T.Vector3(0, 1, 0) },
+    glow: { value: 0.2 },
+  },
+  vertexShader: `varying vec3 vDir;
+    void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform vec3 top, bottom, sun, sunDir; uniform float glow; varying vec3 vDir;
+    void main(){
+      float h = clamp(vDir.y * 0.5 + 0.5, 0.0, 1.0);
+      vec3 c = mix(bottom, top, pow(h, 0.85));
+      float d = max(dot(normalize(vDir), normalize(sunDir)), 0.0);
+      c += sun * pow(d, 900.0) * 2.4;
+      c += sun * pow(d, 9.0) * glow;
+      c = mix(c, bottom, smoothstep(0.02, -0.14, vDir.y));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+const sky = new T.Mesh(new T.SphereGeometry(1600, 32, 20), skyMat);
+scene.add(sky);
+scene.fog = new T.Fog(0xffffff, 200, 900);
+
+const sun = new T.DirectionalLight(0xffffff, 1.8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.45;
+scene.add(sun, sun.target);
+const hemi = new T.HemisphereLight(0xffffff, 0x404040, 0.3);
+scene.add(hemi);
+const fill = new T.DirectionalLight(0xffffff, 0.2);
+scene.add(fill);
+
+const SUN_DIR = new T.Vector3(-0.5, 0.47, 0.72).normalize();
+const waterUni = { value: 0 };
+let water = null;
+let pmrem = new T.PMREMGenerator(renderer);
+let envRT = null;
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.055;
+controls.maxPolarAngle = 1.545;
+controls.minDistance = 18;
+
+/* ══════════════════════════ 4. состояние ══════════════════════════ */
+
+const S = {
+  map: null,            // {name, w, h, grid, glyphs, counts}
+  legend: ['.', '#', 'X'],
+  biome: BIOME_KEYS[0] || 'forest',
+  layers: { plants: true, rocks: true, props: true, shadow: true },
+  type: null,           // Uint8Array типов клеток
+  roadM: null, blkM: null,
+  M: null,              // метрики мира
+  relief: null, ground: null, skyDef: null, waterDef: null,
+  waterY: -1e9,
+  home: { pos: new T.Vector3(), tgt: new T.Vector3() },
+  rnd: mulberry32(4242),
+};
+
+const CELL = 2;
+
+function metricsFor(map) {
+  const MX = map.w * CELL, MZ = map.h * CELL;
+  const ring = Math.max(6, Math.round(Math.max(map.w, map.h) * 0.14));
+  const TW = map.w + ring * 2, TH = map.h + ring * 2;
+  const PX = TW * CELL, PZ = TH * CELL;
+  return {
+    CELL, MX, MZ, ring, TW, TH, PX, PZ,
+    offX: -MX / 2 - ring * CELL, offZ: -MZ / 2 - ring * CELL,
+    segX: clamp(Math.round(PX / 1.1), 24, 360), segZ: clamp(Math.round(PZ / 1.1), 24, 360),
+    span: Math.max(PX, PZ),
+  };
+}
+const cellOf = (x, z) => [
+  Math.floor((x - S.M.offX) / CELL),
+  Math.floor((z - S.M.offZ) / CELL),
+];
+
+/* ══════════════════════════ 5. карта ══════════════════════════ */
+
+function fatal(title, detail) {
+  const p = document.getElementById('lmsg');
+  if (!p) return;
+  p.className = 'err';
+  p.innerHTML = '<b>' + title + '</b><br>' + (detail || '');
+}
+
+function parseMap(raw) {
+  let obj = raw;
+  if (typeof obj === 'string') {
+    try { obj = JSON.parse(obj); }
+    catch (e) { throw new Error('Файл не читается как JSON: ' + e.message); }
+  }
+  let grid = null, name = 'map', w = 0, h = 0;
+  if (Array.isArray(obj)) grid = obj;
+  else if (obj && Array.isArray(obj.grid)) { grid = obj.grid; name = obj.name || name; }
+  else if (obj && Array.isArray(obj.rows)) { grid = obj.rows; name = obj.name || name; }
+  if (!grid) throw new Error('Нет поля grid — ожидается {name, width, height, grid:[строки]}');
+
+  grid = grid.map(r => String(r));
+  h = grid.length; w = grid[0].length;
+  if (h < 2 || w < 2) throw new Error('Карта слишком маленькая: ' + w + '×' + h);
+  if (w > 512 || h > 512) throw new Error('Карта слишком большая: ' + w + '×' + h + ' (максимум 512)');
+  for (const r of grid) if (r.length !== w) throw new Error('Разные длины строк: "' + r.slice(0, 12) + '…"');
+
+  const glyphs = [...new Set(grid.join(''))].filter(g => g !== '\r' && g !== '\n');
+  const counts = {};
+  for (const g of glyphs) counts[g] = 0;
+  for (const row of grid) for (const ch of row) counts[ch]++;
+  return { name, w, h, grid, glyphs, counts };
+}
+
+function autoLegend(map) {
+  const gs = map.glyphs.slice();
+  const pref = ['.', '#', 'X'];
+  const out = new Array(3).fill(null);
+  pref.forEach((g, i) => { if (gs.includes(g) && !out.includes(g)) out[i] = g; });
+  if (out.every(Boolean)) return out;
+  const rest = gs.filter(g => !out.includes(g)).sort((a, b) => map.counts[b] - map.counts[a]);
+  const slots = [FREE, ROAD, BLOCKED];
+  for (const t of slots) {
+    if (out[t]) continue;
+    let pick = rest.shift();
+    if (pick === undefined) pick = gs.find(g => !out.includes(g));
+    if (pick === undefined) break;
+    out[t] = pick;
+  }
+  return out.map(g => g === null ? '.' : g);
+}
+
+function applyLegend() {
+  const map = S.map, M = S.M;
+  const [gf, gr, gb] = S.legend;
+  const t = new Uint8Array(map.w * map.h);
+  const counts = [0, 0, 0], unassigned = [];
+  for (let y = 0; y < map.h; y++) {
+    const row = map.grid[y];
+    for (let x = 0; x < map.w; x++) {
+      const ch = row[x];
+      let k = ch === gf ? FREE : ch === gr ? ROAD : ch === gb ? BLOCKED : -1;
+      if (k < 0) { k = FREE; unassigned.push(ch); }
+      t[y * map.w + x] = k;
+      counts[k]++;
+    }
+  }
+  S.type = t;
+  S.unassigned = [...new Set(unassigned)];
+  S.counts = counts;
+
+  /* размытые маски дорог и занятых участков — по ним рельеф и плотность */
+  const rr = clamp(Math.round(Math.max(map.w, map.h) / 48), 1, 4);
+  const roadRaw = new Float32Array(map.w * map.h);
+  const blkRaw = new Float32Array(map.w * map.h);
+  for (let i = 0; i < t.length; i++) { if (t[i] === ROAD) roadRaw[i] = 1; else if (t[i] === BLOCKED) blkRaw[i] = 1; }
+  S.roadM = boxBlur(roadRaw, map.w, map.h, rr, 2);
+  S.blkM = boxBlur(blkRaw, map.w, map.h, rr, 2);
+}
+
+function boxBlur(src, w, h, r, passes) {
+  let a = Float32Array.from(src), b = new Float32Array(w * h);
+  const cl = (v, n) => v < 0 ? 0 : v > n - 1 ? n - 1 : v;
+  for (let p = 0; p < passes; p++) {
+    for (let y = 0; y < h; y++) {
+      let sum = 0;
+      for (let x = -r; x <= r; x++) sum += a[y * w + cl(x, w)];
+      for (let x = 0; x < w; x++) {
+        b[y * w + x] = sum / (2 * r + 1);
+        sum -= a[y * w + cl(x - r, w)];
+        sum += a[y * w + cl(x + r + 1, w)];
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let y = -r; y <= r; y++) sum += b[cl(y, h) * w + x];
+      for (let y = 0; y < h; y++) {
+        a[y * w + x] = sum / (2 * r + 1);
+        sum -= b[cl(y - r, h) * w + x];
+        sum += b[cl(y + r + 1, h) * w + x];
+      }
+    }
+  }
+  return a;
+}
+
+function maskAt(mask, x, z) {
+  const M = S.M;
+  const fx = (x - M.offX) / CELL - 0.5, fz = (z - M.offZ) / CELL - 0.5;
+  const w = S.map.w, h = S.map.h;
+  if (fx < -1 || fz < -1 || fx > w || fz > h) return 0;
+  const x0 = clamp(Math.floor(fx), 0, w - 1), x1 = clamp(x0 + 1, 0, w - 1);
+  const z0 = clamp(Math.floor(fz), 0, h - 1), z1 = clamp(z0 + 1, 0, h - 1);
+  const u = clamp(fx - x0, 0, 1), v = clamp(fz - z0, 0, 1);
+  return lerp(lerp(mask[z0 * w + x0], mask[z0 * w + x1], u),
+              lerp(mask[z1 * w + x0], mask[z1 * w + x1], u), v);
+}
+
+/* ══════════════════════════ 6. рельеф ══════════════════════════ */
+
+function terrainH(x, z) {
+  const R = S.relief, M = S.M;
+  const road = maskAt(S.roadM, x, z), blk = maskAt(S.blkM, x, z);
+  let n = R.ridged ? fbmRidged(x * R.freq + 5.5, z * R.freq - 2.5, R.oct)
+                   : fbm(x * R.freq + 5.5, z * R.freq - 2.5, R.oct);
+  let h = (n - (R.ridged ? (R.ridgedMid || 0.38) : 0.5)) * R.amp;
+  if (R.detAmp) h += (fbm(x * R.detFreq - 11, z * R.detFreq + 7, 3) - 0.5) * R.detAmp;
+  h *= 1 - R.roadFlatten * road - (R.blockedFlat || 0) * blk;
+  h += (R.blockedLift || 0) * blk;
+  h -= R.roadSink * road;
+  const e = Math.max(Math.abs(x) / (M.PX / 2), Math.abs(z) / (M.PZ / 2));
+  h -= smoothstep(R.rimStart, 1, e) * R.rimDrop;
+  return h + (R.base || 0);
+}
+
+/* ══════════════════════════ 7. земля ══════════════════════════ */
+
+function buildGround() {
+  const M = S.M, G_ = S.ground, map = S.map;
+  const data = new Uint8Array(M.TW * M.TH * 4);
+  const c = new T.Color(), ca = new T.Color(), cb = new T.Color();
+  const put = (i, col) => {
+    col.convertLinearToSRGB();                     // считаем в linear, пишем байты sRGB
+    data[i] = clamp(col.r * 255, 0, 255);
+    data[i + 1] = clamp(col.g * 255, 0, 255);
+    data[i + 2] = clamp(col.b * 255, 0, 255);
+    data[i + 3] = 255;
+  };
+  const pair = (type) => { const p = G_[type]; ca.setHex(p[0], T.SRGBColorSpace); cb.setHex(p[1], T.SRGBColorSpace); };
+
+  for (let ty = 0; ty < M.TH; ty++) {
+    for (let tx = 0; tx < M.TW; tx++) {
+      const gx = tx - M.ring, gy = ty - M.ring;
+      const i = (ty * M.TW + tx) * 4;
+      const inside = gx >= 0 && gy >= 0 && gx < map.w && gy < map.h;
+      if (inside) {
+        const type = S.type[gy * map.w + gx];
+        pair(TYPE_KEY[type]);
+        const n = fbm(tx * G_.mottle, ty * G_.mottle, 4);
+        const grain = noise(tx * 1.7 + 0.5, ty * 1.7 + 0.5);
+        c.copy(ca).lerp(cb, clamp(n * 1.4 - 0.2, 0, 1));
+        let k = 1 - G_.grain + n * G_.grain * 2 + (grain - 0.5) * G_.grain;
+        if (type === ROAD && grain > 1 - G_.speckle) k *= 0.86;
+        if (type === BLOCKED) k *= 0.92;
+        put(i, c.multiplyScalar(k));
+      } else {
+        /* берег: темнее и глуше к краю, чтобы остров не обрывался в пустоту */
+        const d = Math.max(gx < 0 ? -gx : gx >= map.w ? gx - map.w + 1 : 0,
+                          gy < 0 ? -gy : gy >= map.h ? gy - map.h + 1 : 0);
+        const t = clamp(d / M.ring, 0, 1);
+        pair('free');
+        c.copy(ca).lerp(cb, 0.35);
+        put(i, c.multiplyScalar(lerp(0.92, 0.5, t * t)));
+      }
+    }
+  }
+
+  const tex = new T.DataTexture(data, M.TW, M.TH, T.RGBAFormat);
+  tex.colorSpace = T.SRGBColorSpace;
+  tex.magFilter = T.NearestFilter;                 // чёткие границы клеток вблизи
+  tex.minFilter = T.LinearMipmapLinearFilter;       // без мерцания вдали
+  tex.generateMipmaps = true;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  tex.needsUpdate = true;
+
+  const geo = new T.PlaneGeometry(M.PX, M.PZ, M.segX, M.segZ);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    pos.setY(i, terrainH(x, z));
+    uv.setXY(i, (x + M.PX / 2) / M.PX, (z + M.PZ / 2) / M.PZ);
+  }
+  pos.needsUpdate = true; uv.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const mat = new T.MeshStandardMaterial({ map: tex, roughness: 0.94, metalness: 0, envMapIntensity: 0.35 });
+  const mesh = new T.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+const TYPE_KEY = ['free', 'road', 'blocked'];
+
+/* ══════════════════════════ 8. расстановка объектов ══════════════════════════ */
+
+function tint(spec, rand) {
+  const c = new T.Color();
+  if (typeof spec === 'function') return spec(rand, c);
+  if (Array.isArray(spec)) { c.setHex(spec[0], T.SRGBColorSpace); c.lerp(new T.Color().setHex(spec[1], T.SRGBColorSpace), rand[0]); }
+  else if (spec !== undefined && spec !== null) c.setHex(spec, T.SRGBColorSpace);
+  else c.setRGB(1, 1, 1);
+  return c.offsetHSL(0, 0, (rand[1] - 0.5) * 0.07);
+}
+
+function buildScatter() {
+  const group = new T.Group();
+  const map = S.map, M = S.M, def = S.ground;
+  const rnd = S.rnd;
+  const MAX = 26000;
+  let total = 0;
+
+  for (const typeKey of ['free', 'road', 'blocked']) {
+    const typeVal = typeKey === 'free' ? FREE : typeKey === 'road' ? ROAD : BLOCKED;
+    const specs = (BIOMES[S.biome].scatter || {})[typeKey] || [];
+    for (const spec of specs) {
+      const bdef = BUILDERS[spec.b];
+      if (!bdef) { console.warn('[Burrow3D] неизвестный объект:', spec.b); continue; }
+
+      /* 1. собрать места */
+      const places = [];
+      const per = spec.per === undefined ? 1 : spec.per;
+      const dens = spec.dens;
+      for (let cy = 0; cy < map.h && places.length < MAX; cy++) {
+        for (let cx = 0; cx < map.w && places.length < MAX; cx++) {
+          if (S.type[cy * map.w + cx] !== typeVal) continue;
+          let count = 0;
+          if (per >= 1) { count = Math.floor(per); if (rnd() < per % 1) count++; }
+          else if (rnd() < per) count = 1;
+          if (!count) continue;
+          if (dens) {
+            const d = fbm(cx * dens.freq + 60, cy * dens.freq - 35, 3);
+            const chance = clamp((dens.bias || 0) + (dens.gain || 1) * d, 0, 1);
+            if (rnd() > chance) continue;
+          }
+          for (let k = 0; k < count; k++) {
+            const j = spec.jitter === undefined ? 0.9 : spec.jitter;
+            const wx = M.offX + (cx + 0.5 + (rnd() * 2 - 1) * 0.5 * j) * CELL;
+            const wz = M.offZ + (cy + 0.5 + (rnd() * 2 - 1) * 0.5 * j) * CELL;
+            const sc = Array.isArray(spec.scale) ? lerp(spec.scale[0], spec.scale[1], rnd())
+                     : (spec.scale === undefined ? 1 : spec.scale);
+            places.push({
+              x: wx, z: wz, y: terrainH(wx, wz) - 0.06,
+              s: sc, rot: rnd() * Math.PI * 2,
+              tx: (rnd() * 2 - 1) * (spec.tilt || 0),
+              tz: (rnd() * 2 - 1) * (spec.tilt || 0),
+              rand: [rnd(), rnd(), rnd(), rnd()],
+            });
+          }
+        }
+      }
+      if (!places.length) continue;
+      total += places.length;
+
+      /* 2. по одной части — один InstancedMesh */
+      const layer = spec.layer || 'props';
+      for (const part of bdef.parts) {
+        const colSpec = (spec.colors || {})[part.id] !== undefined ? spec.colors[part.id] : part.color;
+        const glowSpec = (spec.glow || {})[part.id];
+        const mat = new T.MeshStandardMaterial({
+          roughness: part.rough === undefined ? 0.9 : part.rough,
+          metalness: 0,
+          envMapIntensity: 0.25,
+          vertexColors: true,                       // без этого instanceColor не применяется
+        });
+        if (part.emissive !== undefined || glowSpec) {
+          mat.emissive = new T.Color().setHex(glowSpec ? glowSpec[0] : part.emissive, T.SRGBColorSpace);
+          mat.emissiveIntensity = glowSpec ? glowSpec[1] : (part.emissiveI || 1);
+        }
+        const mesh = new T.InstancedMesh(part.geo, mat, places.length);
+        mesh.castShadow = spec.shadow !== false && !part.noShadow;
+        mesh.receiveShadow = true;
+        mesh.userData.layer = layer;
+
+        const off = (bdef.offset || {})[part.id];
+        const col = new T.Color();
+        for (let i = 0; i < places.length; i++) {
+          const p = places[i];
+          dummy.position.set(
+            p.x + (off ? off[0] * p.s : 0),
+            p.y + (off ? off[1] * p.s : 0) + (part.float ? lerp(part.float[0], part.float[1], p.rand[2]) * p.s : 0),
+            p.z + (off ? off[2] * p.s : 0));
+          dummy.rotation.set(p.tx, p.rot, p.tz);
+          dummy.scale.setScalar(p.s);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+          mesh.setColorAt(i, tint(colSpec, p.rand));
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        group.add(mesh);
+      }
+    }
+  }
+  group.userData.count = total;
+  scene.add(group);
+  return group;
+}
+
+const dummy = new T.Object3D();
+
+/* ══════════════════════════ 9. вода ══════════════════════════ */
+
+function buildWater() {
+  if (!S.waterDef) { water = null; S.waterY = -1e9; return; }
+  const def = S.waterDef, M = S.M;
+  S.waterY = def.level;
+  const mat = new T.MeshPhysicalMaterial({
+    color: def.color, roughness: def.rough, metalness: 0,
+    clearcoat: def.clear, clearcoatRoughness: 0.05, envMapIntensity: def.envI,
+  });
+  const amp = def.wave === undefined ? 1 : def.wave;
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uTime = waterUni;
+    sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>',
+      `#include <begin_vertex>
+       float w = sin(position.x * 0.021 + uTime * 0.85) * 0.55
+               + sin(position.y * 0.031 - uTime * 0.63) * 0.40
+               + sin((position.x + position.y) * 0.013 + uTime * 0.41) * 0.75;
+       transformed.z += w * ${amp.toFixed(3)};`);
+  };
+  water = new T.Mesh(new T.PlaneGeometry(M.span * 9, M.span * 9, 96, 96), mat);
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = def.level;
+  scene.add(water);
+}
+
+/* ══════════════════════════ 10. биом: свет и небо ══════════════════════════ */
+
+function applyBiome() {
+  const b = BIOMES[S.biome], skyD = b.sky;
+  S.skyDef = skyD; S.relief = b.relief; S.ground = b.ground; S.waterDef = b.water || null;
+
+  skyMat.uniforms.top.value.setHex(skyD.top, T.SRGBColorSpace);
+  skyMat.uniforms.bottom.value.setHex(skyD.bottom, T.SRGBColorSpace);
+  skyMat.uniforms.sun.value.setHex(skyD.sun, T.SRGBColorSpace);
+  skyMat.uniforms.glow.value = skyD.glow === undefined ? 0.18 : skyD.glow;
+  SUN_DIR.set(skyD.sunDir[0], skyD.sunDir[1], skyD.sunDir[2]).normalize();
+  skyMat.uniforms.sunDir.value.copy(SUN_DIR);
+
+  scene.fog.color.setHex(skyD.fog, T.SRGBColorSpace);
+  if (skyD.fogK) { scene.fog.near = S.M.span * skyD.fogK[0]; scene.fog.far = S.M.span * skyD.fogK[1]; }
+  else { scene.fog.near = skyD.fogNear; scene.fog.far = skyD.fogFar; }
+  renderer.toneMappingExposure = skyD.exposure;
+
+  sun.color.setHex(skyD.sun, T.SRGBColorSpace);
+  sun.intensity = skyD.sunI;
+  hemi.color.setHex(skyD.hemiSky, T.SRGBColorSpace);
+  hemi.groundColor.setHex(skyD.hemiGround, T.SRGBColorSpace);
+  hemi.intensity = skyD.hemiI;
+  fill.color.setHex(skyD.fill, T.SRGBColorSpace);
+  fill.intensity = skyD.fillI;
+
+  const M = S.M, r = M.span * 0.62;
+  sun.shadow.camera.left = -r; sun.shadow.camera.right = r;
+  sun.shadow.camera.top = r; sun.shadow.camera.bottom = -r;
+  sun.shadow.camera.near = 20; sun.shadow.camera.far = M.span * 4;
+  sun.shadow.camera.updateProjectionMatrix();
+
+  if (envRT) envRT.dispose();
+  envRT = pmrem.fromScene(new T.Scene().add(sky.clone()), 0, 1, 2500);
+  scene.environment = envRT.texture;
+}
+
+/* ══════════════════════════ 11. пересборка ══════════════════════════ */
+
+let terrain = null, scatter = null;
+
+function disposeOwned() {
+  const kill = [terrain, scatter, water];
+  for (const o of kill) {
+    if (!o) continue;
+    scene.remove(o);
+    o.traverse(n => { if (n.isInstancedMesh) n.material.dispose(); });
+    if (o.isMesh) {
+      if (o.material.map) o.material.map.dispose();
+      o.material.dispose();
+      o.geometry.dispose();
+    }
+  }
+  terrain = scatter = water = null;
+}
+
+function rebuild(keepCamera) {
+  const t0 = performance.now();
+  disposeOwned();
+
+  S.M = metricsFor(S.map);
+  applyLegend();
+  applyBiome();
+  terrain = buildGround();
+  scatter = buildScatter();
+  buildWater();
+  buildMinimap();
+  applyLayers();
+
+  if (!keepCamera) {
+    const M = S.M, span = M.span;
+    S.home.tgt.set(0, terrainH(0, 0), 0);
+    S.home.pos.set(span * 0.38, span * 0.30, span * 0.42);
+    camera.position.copy(S.home.pos);
+    controls.target.copy(S.home.tgt);
+    controls.maxDistance = span * 2.4;
+    controls.update();
+  }
+  S.buildMs = Math.round(performance.now() - t0);
+  paintUI();
+}
+
+function applyLayers() {
+  if (scatter) scatter.traverse(o => { if (o.userData.layer) o.visible = S.layers[o.userData.layer] !== false; });
+  renderer.shadowMap.enabled = S.layers.shadow;
+  sun.castShadow = S.layers.shadow;
+  scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
+}
+
+/* ══════════════════════════ 12. миникарта ══════════════════════════ */
+
+const mmc = document.getElementById('mmc');
+let mctx = null, mmBase = null;
+function buildMinimap() {
+  const map = S.map;
+  mmc.width = map.w; mmc.height = map.h;
+  mctx = mmc.getContext('2d', { willReadFrequently: true });
+  mmBase = document.createElement('canvas');
+  mmBase.width = map.w; mmBase.height = map.h;
+  const b = mmBase.getContext('2d', { willReadFrequently: true });
+  const img = b.createImageData(map.w, map.h);
+  for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) {
+    const p = S.ground[TYPE_KEY[S.type[y * map.w + x]]];
+    const col = mixHex(p[0], p[1], 0.5);
+    const i = (y * map.w + x) * 4;
+    img.data[i] = (col >> 16) & 255; img.data[i + 1] = (col >> 8) & 255;
+    img.data[i + 2] = col & 255; img.data[i + 3] = 255;
+  }
+  b.putImageData(img, 0, 0);
+  const k = 180 / Math.max(map.w, map.h);
+  mmc.style.width = Math.round(map.w * k) + 'px';
+  mmc.style.height = Math.round(map.h * k) + 'px';
+}
+function drawMinimap() {
+  if (!mctx) return;
+  const map = S.map;
+  mctx.imageSmoothingEnabled = false;
+  mctx.clearRect(0, 0, map.w, map.h);
+  mctx.drawImage(mmBase, 0, 0);
+  const px = (camera.position.x - S.M.offX) / CELL;
+  const py = (camera.position.z - S.M.offZ) / CELL;
+  const dir = camera.getWorldDirection(_v1);
+  const a = Math.atan2(dir.z, dir.x);
+  const fov = camera.fov * Math.PI / 180;
+  const rr = Math.max(map.w, map.h) * 0.22;
+  mctx.fillStyle = 'rgba(111,195,255,.22)';
+  mctx.beginPath(); mctx.moveTo(px, py); mctx.arc(px, py, rr, a - fov / 2, a + fov / 2); mctx.closePath(); mctx.fill();
+  mctx.fillStyle = '#6fc3ff';
+  mctx.beginPath(); mctx.arc(px, py, Math.max(1.6, map.w / 48), 0, 6.284); mctx.fill();
+  mctx.strokeStyle = 'rgba(0,0,0,.65)'; mctx.lineWidth = 1; mctx.stroke();
+}
+const _v1 = new T.Vector3();
+
+mmc.addEventListener('click', e => {
+  const r = mmc.getBoundingClientRect();
+  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  const wx = S.M.offX + fx * S.map.w * CELL, wz = S.M.offZ + fy * S.map.h * CELL;
+  if (fly.on) exitFly();
+  const ty = terrainH(wx, wz);
+  controls.target.set(wx, ty, wz);
+  const d = camera.position.distanceTo(controls.target);
+  const dirv = camera.position.clone().sub(controls.target).normalize().multiplyScalar(Math.max(46, d * 0.75));
+  camera.position.copy(controls.target).add(dirv);
+  camera.position.y = Math.max(camera.position.y, ty + 22);
+  controls.update();
+});
+
+/* ══════════════════════════ 13. свободная камера ══════════════════════════ */
+
+const fly = { on: false, yaw: 0, pitch: 0, drag: false, lx: 0, ly: 0, keys: new Set() };
+const _f = new T.Vector3(), _r = new T.Vector3(), _up = new T.Vector3(0, 1, 0);
+
+function enterFly() {
+  fly.on = true; controls.enabled = false;
+  const d = camera.getWorldDirection(_f);
+  fly.yaw = Math.atan2(-d.x, -d.z);
+  fly.pitch = Math.asin(clamp(d.y, -1, 1));
+  canvas.style.cursor = 'crosshair';
+  bFree.classList.add('on');
+}
+function exitFly() {
+  fly.on = false; fly.keys.clear(); fly.drag = false;
+  controls.enabled = true;
+  controls.target.copy(camera.position).add(camera.getWorldDirection(_f).multiplyScalar(60));
+  controls.update();
+  canvas.style.cursor = '';
+  bFree.classList.remove('on');
+}
+const toggleFly = () => fly.on ? exitFly() : enterFly();
+
+canvas.addEventListener('mousedown', e => {
+  if (fly.on && document.pointerLockElement !== canvas) {
+    fly.drag = true; fly.lx = e.clientX; fly.ly = e.clientY;
+    if (e.button === 0 && canvas.requestPointerLock) canvas.requestPointerLock();
+  }
+});
+addEventListener('mouseup', () => fly.drag = false);
+document.addEventListener('pointerlockchange', () => {
+  if (!fly.on && document.pointerLockElement === canvas) document.exitPointerLock();
+});
+addEventListener('mousemove', e => {
+  if (!fly.on) return;
+  let dx = 0, dy = 0;
+  if (document.pointerLockElement === canvas) { dx = e.movementX; dy = e.movementY; }
+  else if (fly.drag) { dx = e.clientX - fly.lx; dy = e.clientY - fly.ly; fly.lx = e.clientX; fly.ly = e.clientY; }
+  else return;
+  fly.yaw -= dx * 0.0022;
+  fly.pitch = clamp(fly.pitch - dy * 0.0022, -1.5, 1.5);
+});
+
+function flyUpdate(dt) {
+  if (!fly.on) return;
+  const sp = (fly.keys.has('ShiftLeft') || fly.keys.has('ShiftRight')) ? 130 : 42;
+  _f.set(-Math.sin(fly.yaw), 0, -Math.cos(fly.yaw));
+  _r.crossVectors(_f, _up).normalize().multiplyScalar(-1);
+  const v = _v2.set(0, 0, 0);
+  if (fly.keys.has('KeyW')) v.add(_f);
+  if (fly.keys.has('KeyS')) v.sub(_f);
+  if (fly.keys.has('KeyD')) v.add(_r);
+  if (fly.keys.has('KeyA')) v.sub(_r);
+  if (fly.keys.has('Space')) v.y += 1;
+  if (fly.keys.has('KeyC')) v.y -= 1;
+  if (v.lengthSq() > 0) camera.position.addScaledVector(v.normalize(), sp * dt);
+  const floor = Math.max(terrainH(camera.position.x, camera.position.z), S.waterY) + 2.2;
+  camera.position.y = Math.max(camera.position.y, floor);
+  camera.position.x = clamp(camera.position.x, -S.M.PX, S.M.PX);
+  camera.position.z = clamp(camera.position.z, -S.M.PZ, S.M.PZ);
+  camera.quaternion.setFromEuler(new T.Euler(fly.pitch, fly.yaw, 0, 'YXZ'));
+}
+const _v2 = new T.Vector3();
+
+/* ══════════════════════════ 14. интерфейс ══════════════════════════ */
+
+const selMap = $('selMap'), selBiome = $('selBiome'), fileIn = $('file');
+const bFree = $('bFree'), bReset = $('bReset'), bSave = $('bSave');
+const bPlants = $('bPlants'), bRocks = $('bRocks'), bProps = $('bProps'), bShadow = $('bShadow');
+const lsel = [...document.querySelectorAll('.lsel')];
+const noteEl = $('note'), note2 = $('note2'), statEl = $('stat'), fpsEl = $('fps');
+const mapMeta = $('mapmeta'), dropEl = $('drop');
+
+DEMO.forEach((m, i) => { const o = document.createElement('option'); o.value = i; o.textContent = m.name; selMap.appendChild(o); });
+BIOME_KEYS.forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = BIOMES[k].name; selBiome.appendChild(o); });
+selBiome.value = S.biome;
+
+function paintUI() {
+  const map = S.map, n = map.w * map.h;
+  mapMeta.textContent = map.name + ' · ' + map.w + '×' + map.h;
+  for (let t = 0; t < 3; t++) $('pc' + t).textContent = (S.counts[t] / n * 100).toFixed(1) + '% · ' + S.counts[t];
+  let note = S.map.glyphs.length + ' символов в карте: ' + S.map.glyphs.map(g => '&quot;' + esc(g) + '&quot;').join(' ');
+  if (S.unassigned && S.unassigned.length) {
+    note += '<br>не отнесены к типам → свободная: ' + S.unassigned.map(g => '&quot;' + esc(g) + '&quot;').join(' ');
+  }
+  noteEl.innerHTML = note;
+  note2.innerHTML = '<b style="color:#cfdae2">' + BIOMES[S.biome].name + '</b><br>' + BIOMES[S.biome].note;
+  statEl.innerHTML = 'объектов <b>' + (scatter ? scatter.userData.count : 0) + '</b> · сборка <b>' + S.buildMs + ' мс</b>';
+  for (const s of lsel) {
+    const t = +s.dataset.t;
+    s.innerHTML = '';
+    for (const g of map.glyphs) {
+      const o = document.createElement('option');
+      o.value = g; o.textContent = g === ' ' ? '␣' : g;
+      s.appendChild(o);
+    }
+    s.value = S.legend[t];
+  }
+}
+
+selMap.onchange = () => { if (selMap.value !== 'custom') loadMap(DEMO[+selMap.value]); };
+function markCustom(name) {
+  let o = selMap.querySelector('option[value="custom"]');
+  if (!o) { o = document.createElement('option'); o.value = 'custom'; o.disabled = true; selMap.appendChild(o); }
+  o.textContent = 'файл: ' + name;
+  selMap.value = 'custom';
+}
+selBiome.onchange = () => { S.biome = selBiome.value; S.rnd = mulberry32(4242); rebuild(true); };
+
+for (const s of lsel) {
+  s.onchange = () => {
+    const i = +s.dataset.t;
+    const g = s.value;
+    const j = S.legend.indexOf(g);
+    /* глиф уже занят другим слотом — меняем их местами, иначе перестановка
+       невозможна: при трёх символах в карте любой обмен блокируется */
+    if (j >= 0 && j !== i) { const t = S.legend[i]; S.legend[i] = g; S.legend[j] = t; }
+    else S.legend[i] = g;
+    rebuild(true);
+  };
+}
+
+bSave.onclick = () => {
+  const map = S.map;
+  const grid = [];
+  for (let y = 0; y < map.h; y++) {
+    let out = '';
+    for (let x = 0; x < map.w; x++) out += OUT_GLYPH[S.type[y * map.w + x]];
+    grid.push(out);
+  }
+  const blob = new Blob([JSON.stringify({ version: 1, name: map.name, width: map.w, height: map.h, grid }, null, 1)],
+    { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = map.name + '.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+
+/* ── слои ── */
+function tgl(btn, key) {
+  S.layers[key] = !S.layers[key];
+  btn.classList.toggle('on', S.layers[key]);
+  applyLayers();
+}
+bPlants.onclick = () => tgl(bPlants, 'plants');
+bRocks.onclick = () => tgl(bRocks, 'rocks');
+bProps.onclick = () => tgl(bProps, 'props');
+bShadow.onclick = () => tgl(bShadow, 'shadow');
+bFree.onclick = toggleFly;
+bReset.onclick = () => { if (fly.on) exitFly(); camera.position.copy(S.home.pos); controls.target.copy(S.home.tgt); controls.update(); };
+
+/* ── загрузка карты ── */
+function loadMap(raw) {
+  try {
+    const map = parseMap(raw);
+    S.map = map;
+    S.legend = autoLegend(map);
+    S.rnd = mulberry32(4242);
+    rebuild(false);
+  } catch (err) {
+    console.error(err);
+    const l = $('loader');
+    if (l) l.classList.remove('gone');
+    fatal('Карта не загрузилась', err.message);
+    setTimeout(() => { if (window.__MAP_READY) $('loader').classList.add('gone'); }, 3200);
+  }
+}
+
+fileIn.onchange = e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => { markCustom(f.name); loadMap(fr.result); };
+  fr.readAsText(f);
+};
+
+let dragDepth = 0;
+addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) dropEl.classList.add('on'); });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; dropEl.classList.remove('on'); } });
+addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; dropEl.classList.remove('on');
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => { markCustom(f.name); loadMap(fr.result); };
+  fr.readAsText(f);
+});
+
+addEventListener('keydown', e => {
+  fly.keys.add(e.code);
+  if (fly.on && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyC', 'ShiftLeft', 'ShiftRight'].includes(e.code)) e.preventDefault();
+  if (e.code === 'KeyF') toggleFly();
+  if (e.code === 'KeyR') bReset.click();
+  if (e.code === 'KeyH') { const p = $('left'); p.style.display = p.style.display === 'none' ? '' : 'none'; }
+});
+addEventListener('keyup', e => fly.keys.delete(e.code));
+addEventListener('blur', () => fly.keys.clear());
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ══════════════════════════ 15. цикл ══════════════════════════ */
+
+const clock = new T.Clock();
+let acc = 0, frames = 0;
+
+renderer.setAnimationLoop(() => {
+  if (!S.M) { renderer.render(scene, camera); return; }
+  const dt = Math.min(clock.getDelta(), 0.05);
+  waterUni.value += dt;
+  flyUpdate(dt);
+  if (!fly.on) controls.update();
+
+  sun.target.position.set(camera.position.x, 0, camera.position.z);
+  sun.position.copy(SUN_DIR).multiplyScalar(S.M.span * 1.4).add(sun.target.position);
+
+  renderer.render(scene, camera);
+  drawMinimap();
+
+  frames++; acc += dt;
+  if (acc > 0.5) { fpsEl.innerHTML = '<b>' + Math.round(frames / acc) + '</b> fps'; frames = 0; acc = 0; }
+});
+
+/* ══════════════════════════ 16. старт ══════════════════════════ */
+
+function boot() {
+  if (!DEMO.length) { fatal('Нет встроенных карт', 'maps.js не загрузился'); return; }
+  if (!BIOME_KEYS.length) { fatal('Нет наборов объектов', 'biomes.js не загрузился'); return; }
+  loadMap(DEMO[0]);
+  window.__MAP_READY = true;
+  const l = $('loader');
+  requestAnimationFrame(() => l.classList.add('gone'));
+}
+
+window.BURROW = { T, scene, camera, renderer, controls, S, BIOMES, BUILDERS, DEMO,
+                  terrainH, loadMap, rebuild, setBiome: id => { selBiome.value = id; selBiome.onchange(); } };
+
+requestAnimationFrame(() => requestAnimationFrame(boot));
+</script>
+</body>
+</html>
