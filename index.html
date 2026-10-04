@@ -523,7 +523,7 @@ const S = {
   biome: BIOME_KEYS[0] || 'forest',
   layers: { plants: true, rocks: true, props: true, shadow: true },
   type: null,           // Uint8Array типов клеток
-  roadM: null, blkM: null,
+  roadM: null, blkM: null, hAvg: null,
   M: null,              // метрики мира
   relief: null, ground: null, skyDef: null, waterDef: null,
   waterY: -1e9,
@@ -535,9 +535,11 @@ const CELL = 2;
 
 function metricsFor(map) {
   const MX = map.w * CELL, MZ = map.h * CELL;
-  const b = BIOMES[S.biome] || {};
-  const base = Math.max(6, Math.round(Math.max(map.w, map.h) * 0.14));
-  const ring = b.water ? base : Math.max(base, Math.round(Math.max(map.w, map.h) * 0.32));
+  /* Поле вокруг карты держит только обрыв, а обрыв отсчитывается от границы
+     КАРТЫ. Раньше он шёл от края полотна, и наборам без воды поле делали
+     втрое шире — иначе квадратная плоскость читалась плитой. Теперь читаемость
+     края задаёт сам обрыв, поэтому ширина одна для всех наборов. */
+  const ring = Math.max(6, Math.round(Math.max(map.w, map.h) * 0.14));
   const TW = map.w + ring * 2, TH = map.h + ring * 2;
   const PX = TW * CELL, PZ = TH * CELL;
   return {
@@ -666,33 +668,96 @@ function boxBlur(src, w, h, r, passes) {
   return a;
 }
 
-function maskAt(mask, x, z) {
-  const M = S.M;
-  const fx = (x - M.originX) / CELL - 0.5, fz = (z - M.originZ) / CELL - 0.5;
-  const w = S.map.w, h = S.map.h;
-  if (fx < -1 || fz < -1 || fx > w || fz > h) return 0;
+/* Билинейная выборка из сетки, покрывающей прямоугольник
+   [ox, ox + w*CELL] × [oz, oz + h*CELL]. Сетка типов клеток и сетка высот
+   читаются по одному правилу — иначе «клетка → мир → клетка» опять разъедется.
+   За пределами прямоугольника возвращаем null: у высоты есть осмысленный
+   запасной вариант, у маски — ноль. */
+function gridAt(arr, w, h, ox, oz, x, z) {
+  const fx = (x - ox) / CELL - 0.5, fz = (z - oz) / CELL - 0.5;
+  if (fx < -1 || fz < -1 || fx > w || fz > h) return null;
   const x0 = clamp(Math.floor(fx), 0, w - 1), x1 = clamp(x0 + 1, 0, w - 1);
   const z0 = clamp(Math.floor(fz), 0, h - 1), z1 = clamp(z0 + 1, 0, h - 1);
   const u = clamp(fx - x0, 0, 1), v = clamp(fz - z0, 0, 1);
-  return lerp(lerp(mask[z0 * w + x0], mask[z0 * w + x1], u),
-              lerp(mask[z1 * w + x0], mask[z1 * w + x1], u), v);
+  return lerp(lerp(arr[z0 * w + x0], arr[z0 * w + x1], u),
+              lerp(arr[z1 * w + x0], arr[z1 * w + x1], u), v);
+}
+function maskAt(mask, x, z) {
+  const M = S.M;
+  const v = gridAt(mask, S.map.w, S.map.h, M.originX, M.originZ, x, z);
+  return v === null ? 0 : v;
 }
 
-/* ══════════════════════════ 6. рельеф ══════════════════════════ */
+/* ══════════════════════════ 6. рельеф ══════════════════════════
+
+   Три независимые части, и порядок между ними важнее каждой по отдельности:
+
+     1. rawH()  — базовый шум по всей карте плюс гребни RIDGE, но только на
+                  занятых клетках. Аналитическая функция: рельеф остаётся
+                  чётким на любом расстоянии, а не ступеньками по сетке.
+     2. дорога  — повод к СГЛАЖЕННОЙ высоте (S.hAvg), а не доля от шума.
+     3. обрыв  — падение наружу от границы карты.
+
+   Почему не «доля от шума». Прежде дорога и занятые клетки сглаживались
+   умножением: h *= 1 - roadFlatten*road. Умножение на маску с резкой границей
+   даёт уторок на самой границе маски, и тем выше, чем больше высота. Замер на
+   карте 40×40: средняя ступенька между соседними клетками дороги 1.9 против
+   0.4 на свободных — дорога выходила вчетверо грубее ровного места. Сложение
+   и интерполяция к гладкому полю такого не дают.                            */
+
+function rawH(x, z) {
+  const R = S.relief;
+  let h = (fbm(x * R.freq + 5.5, z * R.freq - 2.5, R.oct) - (R.mid === undefined ? 0.5 : R.mid)) * R.amp;
+  if (R.detAmp) h += (fbm(x * R.detFreq - 11, z * R.detFreq + 7, 3) - 0.5) * R.detAmp;
+  if (R.ridgeAmp) {
+    /* Гребни — только занятые клетки, поэтому горы стоят там, где лес и камни,
+       а поля между ними остаются долинами. Маска размытая, поэтому у подножия
+       массива выходит естественный переход, а не ступенька. */
+    const n = fbmRidged(x * R.ridgeFreq + 5.5, z * R.ridgeFreq - 2.5, R.ridgeOct);
+    /* fbmRidged неотрицателен, поэтому горы только поднимаются и никогда не
+       роют яму — иначе занятые клетки уходили бы под воду вместе с краем.
+       Квадрат здесь не нужен: он стягивает massif в шпили вместо гребней. */
+    h += n * R.ridgeAmp * maskAt(S.blkM, x, z);
+  }
+  return h + (R.blockedLift || 0) * maskAt(S.blkM, x, z);
+}
+
+/* Сетка сглаженной высоты — «по чему едет дорога». Заполняется до buildGround:
+   terrainH читает её, а сам из неё не считается, иначе сглаживание зациклилось
+   бы на себя. Сетка клетковая и сама по себе сглаженная — мельче нет смысла. */
+function buildHeight() {
+  const M = S.M, w = M.TW, h = M.TH;
+  const g = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) {
+    const z = M.planeZ + (j + 0.5) * CELL;
+    for (let i = 0; i < w; i++) g[j * w + i] = rawH(M.planeX + (i + 0.5) * CELL, z);
+  }
+  /* радиус в клетках: чем больше карта, тем шире «ровная» полоса дороги */
+  S.hAvg = boxBlur(g, w, h, clamp(Math.round(Math.max(S.map.w, S.map.h) / 28), 2, 4), 2);
+}
+
+/* Обрыв: ноль на границе карты, полный спад на краю полотна. Обе границы в
+   долях ширины поля, поэтому у наборов с одинаковыми числами край выглядит
+   одинаково на картах любого размера. Внутри карты обрыв не действует — иначе
+   он съедал край карты, и та уходила под воду (лес: -19.7 при воде -11). */
+function rimDrop(x, z) {
+  const R = S.relief, M = S.M;
+  const out = Math.max(Math.max(0, Math.abs(x) - M.MX / 2),
+                       Math.max(0, Math.abs(z) - M.MZ / 2)) / (CELL * M.ring);
+  return out <= R.rimStart ? 0 : smoothstep(R.rimStart, R.rimEnd, out) * R.rimDrop;
+}
 
 function terrainH(x, z) {
   const R = S.relief, M = S.M;
-  const road = maskAt(S.roadM, x, z), blk = maskAt(S.blkM, x, z);
-  let n = R.ridged ? fbmRidged(x * R.freq + 5.5, z * R.freq - 2.5, R.oct)
-                   : fbm(x * R.freq + 5.5, z * R.freq - 2.5, R.oct);
-  let h = (n - (R.ridged ? (R.ridgedMid || 0.38) : 0.5)) * R.amp;
-  if (R.detAmp) h += (fbm(x * R.detFreq - 11, z * R.detFreq + 7, 3) - 0.5) * R.detAmp;
-  h *= 1 - R.roadFlatten * road - (R.blockedFlat || 0) * blk;
-  h += (R.blockedLift || 0) * blk;
-  h -= R.roadSink * road;
-  const e = Math.hypot(x / (M.PX / 2), z / (M.PZ / 2));
-  h -= smoothstep(R.rimStart, 1, e) * R.rimDrop;
-  return h + (R.base || 0);
+  const raw = rawH(x, z);
+  const road = maskAt(S.roadM, x, z);
+  const flat = (R.roadFlatten || 0) * road;
+  let h = raw;
+  if (flat) {
+    const v = gridAt(S.hAvg, M.TW, M.TH, M.planeX, M.planeZ, x, z);
+    h = lerp(raw, v === null ? raw : v, flat);
+  }
+  return h - (R.roadSink || 0) * road - rimDrop(x, z) + (R.base || 0);
 }
 
 /* ══════════════════════════ 7. земля ══════════════════════════ */
@@ -726,10 +791,13 @@ function buildGround() {
         if (type === BLOCKED) k *= 0.92;
         put(i, c.multiplyScalar(k));
       } else {
-        /* берег: темнее и глуше к краю, чтобы остров не обрывался в пустоту */
+        /* берег: темнее и глуше к краю, чтобы остров не обрывался в пустоту.
+           Затемнение ложится на полосу обрыва, а не на всё поле — иначе тёмная
+           кайма оказывалась там, где поверхность ещё ровная. */
         const d = Math.max(gx < 0 ? -gx : gx >= map.w ? gx - map.w + 1 : 0,
                           gy < 0 ? -gy : gy >= map.h ? gy - map.h + 1 : 0);
-        const t = clamp(d / M.ring, 0, 1);
+        const R = S.relief;
+        const t = clamp((d / M.ring - R.rimStart) / Math.max(1e-6, R.rimEnd - R.rimStart), 0, 1);
         pair('free');
         c.copy(ca).lerp(cb, 0.35);
         put(i, c.multiplyScalar(lerp(0.92, 0.5, t * t)));
@@ -960,6 +1028,7 @@ function rebuild(keepCamera) {
   S.M = metricsFor(S.map);
   applyLegend();
   applyBiome();
+  buildHeight();
   terrain = buildGround();
   scatter = buildScatter();
   buildWater();

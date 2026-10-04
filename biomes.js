@@ -18,15 +18,23 @@
                 sunI         интенсивность солнца
                 hemiSky/hemiGround/hemiI   полусферический свет
                 fill/fillI    контровой заполняющий свет
-   water       null — суша; иначе {level, color, rough, clear, envI, wave}
-   relief      рельеф:
-                amp/freq/oct     амплитуда, частота и число октав fbm
-                ridged           true — гребни вместо холмов (горы)
-                detAmp/detFreq   мелкая деталь
-                roadFlatten/roadSink   насколько дорога ровная и насколько проседает
-                blockedLift/blockedFlat  подъём и сглаживание занятых клеток
-                rimStart/rimDrop как кромка уходит вниз (берег/обрыв)
-                base             сдвиг всей поверхности по Y
+water       null — суша; иначе {level, color, rough, clear, envI, wave}
+                flood: true — карта местами под водой намеренно (болота)
+    relief      рельеф:
+                 amp/freq/oct/mid   базовый рельеф по всей карте (mid ≈ 0.5)
+                 detAmp/detFreq     мелкая деталь
+                 ridgeAmp           гребни гор, ТОЛЬКО на занятых клетках:
+                                   ridgeFreq/ridgeOct — их частота и октавы.
+                                   ridgeAmp: 0 — гор нет (равнина с холмами)
+                 roadFlatten        насколько дорога берёт сглаженную высоту
+                                   вместо собственного шума; 0..1
+                 roadSink           насколько дорога проседает (минус — приподнять:
+                                   дамба выше воды)
+                 blockedLift        подъём занятых клеток
+                 rimStart/rimEnd    обрыв, в долях ширины поля вокруг карты:
+                                   0 — на границе карты, rimEnd — на краю поля
+                 rimDrop            насколько падает поверхность на обрыве
+                 base               сдвиг всей поверхности по Y
    ground      цвета земли (второй цвет — вариация по шуму):
                 free/road/blocked  пары [тёмный, светлый]
                 grain             разброс яркости по клеткам
@@ -61,11 +69,12 @@ window.BIOMES = {
     },
     water: { level: -11, color: 0x2f7d9b, rough: 0.05, clear: 1, envI: 1.45, wave: 1 },
     relief: {
-      amp: 13.5, freq: 0.028, oct: 5, ridged: false,
+      amp: 13.5, freq: 0.028, oct: 5,
       detAmp: 2.2, detFreq: 0.105,
-      roadFlatten: 0.86, roadSink: 1.05,
-      blockedLift: 0, blockedFlat: 0,
-      rimStart: 0.60, rimDrop: 26, base: 0,
+      ridgeAmp: 0,
+      roadFlatten: 0.85, roadSink: 1.05,
+      blockedLift: 0.6,
+      rimStart: 0.05, rimEnd: 0.9, rimDrop: 26, base: 0,
     },
     ground: {
       free: [0x63903c, 0x8ab457], road: [0x8c7047, 0xb59463], blocked: [0x4a5a2c, 0x6b7a3a],
@@ -109,11 +118,12 @@ window.BIOMES = {
     },
     water: null,
     relief: {
-      amp: 13, freq: 0.014, oct: 4, ridged: false,
+      amp: 13, freq: 0.014, oct: 4,
       detAmp: 1.2, detFreq: 0.085,
-      roadFlatten: 0.80, roadSink: 0.45,
-      blockedLift: 2.5, blockedFlat: 0.3,
-      rimStart: 0.62, rimDrop: 22, base: 0,
+      ridgeAmp: 0,
+      roadFlatten: 0.8, roadSink: 0.45,
+      blockedLift: 2.5,
+      rimStart: 0.05, rimEnd: 0.9, rimDrop: 22, base: 0,
     },
     ground: {
       free: [0xc4a067, 0xead094], road: [0xa88a5e, 0xcbb083], blocked: [0x8a6f4a, 0xb59468],
@@ -152,11 +162,15 @@ window.BIOMES = {
     },
     water: { level: -13, color: 0x3a7f96, rough: 0.06, clear: 1, envI: 1.3, wave: 1.2 },
     relief: {
-      amp: 42, freq: 0.018, oct: 6, ridged: true, ridgedMid: 0.36,
+      /* Долины — базовый шум, и он же держит русло дороги. Горы поднимаются
+         отдельно и ТОЛЬКО на занятых клетках: раньше гребни шли по всей карте,
+         и «Горы» были просто очень бугристым полем. */
+      amp: 14, freq: 0.02, oct: 5,
       detAmp: 2.6, detFreq: 0.09,
-      roadFlatten: 0.72, roadSink: 0.9,
-      blockedLift: 4, blockedFlat: 0.12,
-      rimStart: 0.62, rimDrop: 42, base: 0,
+      ridgeAmp: 58, ridgeFreq: 0.017, ridgeOct: 6,
+      roadFlatten: 0.9, roadSink: 0.6,
+      blockedLift: 0,
+      rimStart: 0.05, rimEnd: 0.9, rimDrop: 46, base: 0,
     },
     ground: {
       free: [0x4a7a4a, 0x6f9a6a], road: [0x7f868c, 0xa8b0b6], blocked: [0x5f656c, 0x878e95],
@@ -193,11 +207,12 @@ window.BIOMES = {
     },
     water: null,
     relief: {
-      amp: 12.5, freq: 0.022, oct: 5, ridged: false,
+      amp: 12.5, freq: 0.022, oct: 5,
       detAmp: 1.7, detFreq: 0.1,
+      ridgeAmp: 0,
       roadFlatten: 0.84, roadSink: 0.6,
-      blockedLift: 4, blockedFlat: 0.15,
-      rimStart: 0.58, rimDrop: 26, base: 0,
+      blockedLift: 4,
+      rimStart: 0.05, rimEnd: 0.9, rimDrop: 26, base: 0,
     },
     ground: {
       free: [0x9c4f2c, 0xc4703f], road: [0x7d3f24, 0xa35a33], blocked: [0x5e2f1c, 0x7d4429],
@@ -234,13 +249,16 @@ window.BIOMES = {
       hemiSky: 0xf0d890, hemiGround: 0x4a5a3a, hemiI: 0.48,
       fill: 0xbfd8a0, fillI: 0.20, glow: 0.30,
     },
-    water: { level: -0.4, color: 0x2a8f74, rough: 0.10, clear: 0.8, envI: 1.2, wave: 0.55 },
+    water: { level: -0.4, color: 0x2a8f74, rough: 0.10, clear: 0.8, envI: 1.2, wave: 0.55, flood: true },
     relief: {
-      amp: 3.4, freq: 0.03, oct: 4, ridged: false,
+      /* Мелководье: земля едва поднимается из воды, поэтому дорога — дамба,
+         приподнятая над своим же уровнем (roadSink отрицательный). */
+      amp: 3.4, freq: 0.03, oct: 4,
       detAmp: 0.9, detFreq: 0.12,
-      roadFlatten: 0.45, roadSink: -0.9,
-      blockedLift: 2.2, blockedFlat: 0.35,
-      rimStart: 0.62, rimDrop: 16, base: 0,
+      ridgeAmp: 0,
+      roadFlatten: 0.75, roadSink: -0.9,
+      blockedLift: 2.2,
+      rimStart: 0.05, rimEnd: 0.85, rimDrop: 16, base: 0,
     },
     ground: {
       free: [0x3d5a34, 0x5c7a48], road: [0x8a7a4a, 0xaa9a62], blocked: [0x2f4a2a, 0x46683a],
@@ -277,13 +295,16 @@ window.BIOMES = {
       hemiSky: 0xbcd8f2, hemiGround: 0x6a7a86, hemiI: 0.36,
       fill: 0xa8c8e8, fillI: 0.26, glow: 0.20,
     },
-    water: { level: -8, color: 0x2a5f80, rough: 0.04, clear: 1, envI: 1.5, wave: 0.8 },
+    water: { level: -11, color: 0x2a5f80, rough: 0.04, clear: 1, envI: 1.5, wave: 0.8 },
     relief: {
-      amp: 16, freq: 0.024, oct: 5, ridged: false,
+      amp: 15, freq: 0.024, oct: 5,
       detAmp: 1.8, detFreq: 0.11,
-      roadFlatten: 0.80, roadSink: 1.0,
-      blockedLift: 5, blockedFlat: 0.2,
-      rimStart: 0.58, rimDrop: 30, base: 0,
+      ridgeAmp: 0,
+      roadFlatten: 0.82, roadSink: 1.0,
+      blockedLift: 5,
+      /* воду опустили с -8: при amp 15 половина края карты оказывалась ровно
+         на уровне воды, и берег то тонул, то обрывался в никуда */
+      rimStart: 0.05, rimEnd: 0.9, rimDrop: 30, base: 0,
     },
     ground: {
       free: [0xe4eef6, 0xfafdff], road: [0x8ba3b6, 0xaec6d6], blocked: [0x7fa8c4, 0xa8cde4],
@@ -322,11 +343,12 @@ window.BIOMES = {
     },
     water: null,
     relief: {
-      amp: 10.5, freq: 0.03, oct: 5, ridged: false,
+      amp: 10.5, freq: 0.03, oct: 5,
       detAmp: 1.4, detFreq: 0.115,
-      roadFlatten: 0.78, roadSink: 0.9,
-      blockedLift: 3.5, blockedFlat: 0.25,
-      rimStart: 0.62, rimDrop: 22, base: 0,
+      ridgeAmp: 0,
+      roadFlatten: 0.8, roadSink: 0.9,
+      blockedLift: 3.5,
+      rimStart: 0.05, rimEnd: 0.9, rimDrop: 22, base: 0,
     },
     ground: {
       free: [0x50684a, 0x76916a], road: [0x6f6684, 0x968ba8], blocked: [0x42593c, 0x5f7a54],

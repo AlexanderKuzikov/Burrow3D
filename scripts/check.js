@@ -93,12 +93,30 @@ for (const [id, b] of Object.entries(BIOMES)) {
 
   if (b.water !== null) {
     if (!isNum(b.water.level)) fail(`${where}: water.level — число`);
-    else if (b.water.level < b.relief.base - b.relief.amp - b.relief.rimDrop) warn(`${where}: вода ниже всего рельефа, поверхности не будет видно`);
+    else if (b.water.flood !== undefined && typeof b.water.flood !== 'boolean') fail(`${where}: water.flood — true/false`);
+    else if (!b.water.flood && b.water.level > b.relief.base) {
+      warn(`${where}: вода выше базовой отметки — суши не будет видно. Для намеренно затопленной карты поставь water.flood: true`);
+    }
   }
 
-  for (const k of ['amp', 'freq', 'oct', 'rimStart', 'rimDrop']) if (!isNum(b.relief[k])) fail(`${where}: relief.${k} — число`);
+  for (const k of ['amp', 'freq', 'oct', 'base', 'rimStart', 'rimEnd', 'rimDrop']) {
+    if (!isNum(b.relief[k])) fail(`${where}: relief.${k} — число`);
+  }
   if (isNum(b.relief.amp) && b.relief.amp <= 0) fail(`${where}: relief.amp должен быть больше нуля`);
-  if (isNum(b.relief.rimStart) && (b.relief.rimStart <= 0 || b.relief.rimStart >= 1)) fail(`${where}: relief.rimStart вне (0;1)`);
+  /* обрыв отсчитывается от границы карты в долях ширины поля: 0 — край карты,
+     1 — край полотна. Вне этого порядка спад не начнётся или не закончится. */
+  if ([b.relief.rimStart, b.relief.rimEnd].every(isNum)) {
+    if (b.relief.rimStart < 0 || b.relief.rimEnd > 1 || b.relief.rimStart >= b.relief.rimEnd) {
+      fail(`${where}: relief.rimStart/rimEnd должны идти по возрастанию внутри [0;1], ` +
+           `а это ${b.relief.rimStart} → ${b.relief.rimEnd}`);
+    }
+  }
+  if (b.relief.ridgeAmp !== undefined) {
+    if (!isNum(b.relief.ridgeAmp) || b.relief.ridgeAmp < 0) fail(`${where}: relief.ridgeAmp — неотрицательное число`);
+    if (b.relief.ridgeAmp > 0) {
+      for (const k of ['ridgeFreq', 'ridgeOct']) if (!isNum(b.relief[k])) fail(`${where}: relief.${k} — число, если заданы горы`);
+    }
+  }
 
   for (const t of ['free', 'road', 'blocked']) if (!isHexPair(b.ground[t])) fail(`${where}: ground.${t} — пара цветов`);
   if (!['free', 'road', 'blocked'].every(t => isHexPair(b.ground[t]))) continue;

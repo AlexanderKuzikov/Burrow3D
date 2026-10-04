@@ -187,6 +187,90 @@ test.describe('Burrow3D', () => {
     expect(errors).toEqual([]);
   });
 
+  test('край карты, дорога и горы ведут себя как задумано', async ({ page }) => {
+    const errors = collectErrors(page);
+    await boot(page, errors);
+
+    /* Три свойства, которые невозможно увидеть глазами, пока не сломан рельеф:
+         1. край карты выше воды (кроме намеренно затопленных наборов);
+         2. дорога не грубее соседних свободных клеток — иначе «ровная» дорога
+            оказывалась уторком на границе своей маски;
+         3. горы достаются только занятым клеткам: свободные вдали от занятых
+            остаются в базовом рельефе набора. */
+    const PROBE = () => {
+      const B = window.BURROW, S = B.S, M = S.M, W = S.map.w, H = S.map.h;
+      const h = (cx, cy) => B.terrainH(M.originX + (cx + 0.5) * M.CELL, M.originZ + (cy + 0.5) * M.CELL);
+      const step = t => {
+        const d = [];
+        for (let cy = 0; cy < H; cy++) for (let cx = 0; cx < W - 1; cx++) {
+          if (S.type[cy * W + cx] !== t || S.type[cy * W + cx + 1] !== t) continue;
+          d.push(Math.abs(h(cx, cy) - h(cx + 1, cy)));
+        }
+        return d.length ? d.reduce((a, b) => a + b, 0) / d.length : null;
+      };
+      let edgeMin = Infinity;
+      for (let cx = 0; cx < W; cx++) edgeMin = Math.min(edgeMin, h(cx, 0), h(cx, H - 1));
+      for (let cy = 0; cy < H; cy++) edgeMin = Math.min(edgeMin, h(0, cy), h(W - 1, cy));
+      /* свободная клетка, от которой занятая дальше чем на 4 клетки */
+      let farMax = -Infinity, farN = 0;
+      for (let cy = 0; cy < H; cy++) for (let cx = 0; cx < W; cx++) {
+        if (S.type[cy * W + cx] !== 0) continue;
+        let near = false;
+        for (let dy = -4; dy <= 4 && !near; dy++) for (let dx = -4; dx <= 4; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          if (S.type[ny * W + nx] === 2) { near = true; break; }
+        }
+        if (near) continue;
+        farMax = Math.max(farMax, h(cx, cy)); farN++;
+      }
+      return {
+        biome: S.biome, waterY: S.waterDef ? S.waterDef.level : null,
+        flood: !!(S.waterDef && S.waterDef.flood),
+        ridgeAmp: S.relief.ridgeAmp || 0, amp: S.relief.amp, detAmp: S.relief.detAmp || 0,
+        edgeMin: +edgeMin.toFixed(2), stepFree: step(0), stepRoad: step(1),
+        farMax: farN ? +farMax.toFixed(2) : null, farN,
+      };
+    };
+
+    const maps = await page.evaluate(() => window.BURROW.DEMO.map(m => m.name));
+    const biomes = await page.evaluate(() => Object.keys(window.BURROW.BIOMES));
+    const bad = [];
+    const seen = [];
+
+    for (const name of maps) {
+      await page.evaluate(n => {
+        const i = window.BURROW.DEMO.findIndex(m => m.name === n);
+        window.BURROW.loadMap(window.BURROW.DEMO[i]);
+      }, name);
+      await page.waitForTimeout(150);
+      for (const id of biomes) {
+        await page.evaluate(b => window.BURROW.setBiome(b), id);
+        await page.waitForTimeout(150);
+        const r = await page.evaluate(PROBE);
+        seen.push(`${name}/${r.biome}`);
+        const at = `${name} / ${r.biome}`;
+
+        if (r.waterY !== null && !r.flood && r.edgeMin < r.waterY + 1) {
+          bad.push(`${at}: край карты на ${r.edgeMin} — ниже воды (${r.waterY}); карта тонет`);
+        }
+        if (r.stepRoad !== null && r.stepFree !== null && r.stepRoad > r.stepFree * 1.15 + 0.05) {
+          bad.push(`${at}: дорога грубее местности — ступенька ${r.stepRoad} против ${r.stepFree}`);
+        }
+        if (r.ridgeAmp > 0 && r.farMax !== null) {
+          const bound = r.amp * 0.5 + r.detAmp * 0.5 + 2;
+          if (r.farMax > bound) {
+            bad.push(`${at}: горы забрали свободные клетки (${r.farMax} > ${bound.toFixed(1)} вне занятых)`);
+          }
+        }
+      }
+    }
+
+    expect(seen.length, 'наборы не прогнались').toBe(maps.length * biomes.length);
+    expect(bad, 'рельеф поехал:\n  ' + bad.join('\n  ')).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
   test('слои выключаются и включаются обратно', async ({ page }) => {
     const errors = collectErrors(page);
     await boot(page, errors);
