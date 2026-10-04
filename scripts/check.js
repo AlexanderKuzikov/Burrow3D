@@ -38,11 +38,15 @@ function parseBuilders() {
   const to = html.indexOf('\n};', from);
   if (from < 0 || to < 0) { fail('index.html: не найден блок BUILDERS'); return {}; }
   const block = html.slice(from, to);
-  const starts = [...block.matchAll(/^  (\w+): \{$/gm)].map(m => ({ name: m[1], at: m.index }));
+  const starts = [...block.matchAll(/^  (\w+): \{ solid: (true|false),$/gm)]
+    .map(m => ({ name: m[1], solid: m[2] === 'true', at: m.index }));
   const out = {};
   starts.forEach((s, i) => {
     const end = i + 1 < starts.length ? starts[i + 1].at : block.length;
-    out[s.name] = [...block.slice(s.at, end).matchAll(/id: '(\w+)'/g)].map(m => m[1]);
+    out[s.name] = {
+      solid: s.solid,
+      ids: [...block.slice(s.at, end).matchAll(/id: '(\w+)'/g)].map(m => m[1]),
+    };
   });
   return out;
 }
@@ -105,8 +109,16 @@ for (const [id, b] of Object.entries(BIOMES)) {
     for (const sp of specs) {
       rules++;
       const at = `${where} → ${type} → ${sp.b}`;
-      const parts = BUILDERS[sp.b];
-      if (!parts) { fail(`${at}: объекта нет в BUILDERS (доступны: ${Object.keys(BUILDERS).join(', ')})`); continue; }
+      const obj = BUILDERS[sp.b];
+      if (!obj) { fail(`${at}: объекта нет в BUILDERS (доступны: ${Object.keys(BUILDERS).join(', ')})`); continue; }
+      const parts = obj.ids;
+      /* главное правило данных: свободная клетка и дорога проходимы.
+         Препятствие (`solid`) там превратило бы свободную клетку в занятую
+         и перекрыло дорогу — это ошибка, а не украшение. */
+      if (obj.solid && (type === 'free' || type === 'road')) {
+        fail(`${at}: объект непроходимый, а стоял бы на ${type === 'free' ? 'свободной' : 'дороге'} клетке. ` +
+             `Перенеси в scatter.${type === 'free' ? 'blocked' : 'blocked'} или возьми проходимый объект`);
+      }
       if (!parts.length) fail(`${at}: у объекта нет ни одной части с id`);
       if (sp.layer !== undefined && !LAYERS.has(sp.layer)) fail(`${at}: неизвестный layer «${sp.layer}»`);
       if (sp.per !== undefined && !(isNum(sp.per) && sp.per >= 0)) fail(`${at}: per — неотрицательное число`);

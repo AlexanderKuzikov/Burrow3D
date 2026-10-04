@@ -292,7 +292,7 @@ const G = {
 };
 
 const BUILDERS = {
-  conifer: {
+  conifer: { solid: true,
     parts: [
       { id: 'trunk', geo: G.cyl(0.10, 0.19, 1.7, 6), y: 0, color: 0x5d4028, rough: 0.95 },
       { id: 'low', geo: G.cone(1.22, 2.7, 7), y: 0, color: 0x2f6b28, rough: 0.85 },
@@ -300,7 +300,7 @@ const BUILDERS = {
     ],
     offset: { trunk: [0, 0.85], low: [0, 2.05], top: [0, 3.6] },
   },
-  pine: {
+  pine: { solid: true,
     parts: [
       { id: 'trunk', geo: G.cyl(0.08, 0.15, 2.2, 6), color: 0x4a3320, rough: 0.95 },
       { id: 'low', geo: mergeAll([at(G.cone(1.05, 2.3, 6), { y: 1.15 })]), color: 0x2c5a3a, rough: 0.85 },
@@ -308,7 +308,7 @@ const BUILDERS = {
       { id: 'top', geo: at(G.cone(0.5, 2.0, 6), { y: 3.9 }), color: 0x3c7049, rough: 0.85 },
     ],
   },
-  broadleaf: {
+  broadleaf: { solid: true,
     parts: [
       { id: 'trunk', geo: G.cyl(0.12, 0.22, 2.0, 6), color: 0x54391f, rough: 0.95 },
       { id: 'crown', geo: at(G.ico(1.15, 0), { y: 2.6, sy: 0.86 }), color: 0x3d7a24, rough: 0.85 },
@@ -316,7 +316,7 @@ const BUILDERS = {
     ],
     offset: { trunk: [0, 1.0] },
   },
-  cactus: {
+  cactus: { solid: true,
     parts: [
       { id: 'body', geo: at(G.cyl(0.3, 0.34, 2.8, 9), { y: 1.4 }), color: 0x3f7a4a, rough: 0.8 },
       { id: 'arm', geo: mergeAll([
@@ -326,7 +326,7 @@ const BUILDERS = {
     ],
     offset: { arm: [0.62, 1.5, 0, 0, 0, -0.75] },
   },
-  deadTree: {
+  deadTree: { solid: true,
     parts: [
       { id: 'wood', color: 0x6b563a, rough: 0.95, geo: mergeAll([
         at(G.cyl(0.09, 0.2, 2.8, 6), { y: 1.4 }),
@@ -336,7 +336,7 @@ const BUILDERS = {
       ]) },
     ],
   },
-  boulder: {
+  boulder: { solid: true,
     parts: [
       { id: 'rock', color: 0x7d7d78, rough: 0.92, geo: mergeAll([
         at(G.dodeca(0.8), { y: 0.5, sy: 0.8 }),
@@ -345,10 +345,10 @@ const BUILDERS = {
       ]) },
     ],
   },
-  pebble: {
+  pebble: { solid: false,
     parts: [{ id: 'rock', geo: G.dodeca(0.34), color: 0x8a8a84, rough: 0.9 }],
   },
-  tuft: {
+  tuft: { solid: false,
     parts: [
       { id: 'blade', color: 0x4f8a2c, rough: 1, geo: mergeAll([
         at(G.cone(0.1, 0.62, 4), { y: 0.31 }),
@@ -357,7 +357,7 @@ const BUILDERS = {
       ]) },
     ],
   },
-  reed: {
+  reed: { solid: false,
     parts: [
       { id: 'stalk', color: 0x6f8a3a, rough: 1, geo: mergeAll([
         at(G.cone(0.055, 1.5, 4), { y: 0.75 }),
@@ -367,7 +367,7 @@ const BUILDERS = {
       ]) },
     ],
   },
-  scrub: {
+  scrub: { solid: false,
     parts: [
       { id: 'bush', color: 0x8a7a45, rough: 1, geo: mergeAll([
         at(G.ico(0.36, 0), { y: 0.3, sy: 0.8 }),
@@ -376,14 +376,14 @@ const BUILDERS = {
       ]) },
     ],
   },
-  mushroom: {
+  mushroom: { solid: false,
     parts: [
       { id: 'stem', geo: at(G.cyl(0.11, 0.15, 0.7, 7), { y: 0.35 }), color: 0xd9e8bf, rough: 0.9 },
       { id: 'cap', geo: at(G.sph(0.42, 9, 6), { y: 0.74, sy: 0.55 }), color: 0xd06a9a, rough: 0.7,
         emissive: 0x8a2a6a, emissiveI: 0.7 },
     ],
   },
-  giantMushroom: {
+  giantMushroom: { solid: true,
     parts: [
       { id: 'stem', geo: at(G.cyl(0.34, 0.46, 2.3, 9), { y: 1.15 }), color: 0xbfd8a0, rough: 0.9 },
       { id: 'cap', geo: at(G.sph(1.25, 11, 7), { y: 2.5, sy: 0.5 }), color: 0xc05a8a, rough: 0.65,
@@ -392,7 +392,7 @@ const BUILDERS = {
         emissive: 0xff9a50, emissiveI: 1.6 },
     ],
   },
-  crystal: {
+  crystal: { solid: true,
     parts: [
       { id: 'shard', color: 0xd9a0ff, rough: 0.25, geo: mergeAll([
         at(G.octa(0.42), { y: 0.55, sy: 1.5 }),
@@ -401,7 +401,7 @@ const BUILDERS = {
       ]), emissive: 0x7a3ab0, emissiveI: 0.9 },
     ],
   },
-  iceSpike: {
+  iceSpike: { solid: true,
     parts: [
       { id: 'spike', color: 0x9fd0ea, rough: 0.18, geo: mergeAll([
         at(G.cone(0.36, 3.2, 5), { y: 1.6 }),
@@ -410,12 +410,12 @@ const BUILDERS = {
       ]) },
     ],
   },
-  drift: {
+  drift: { solid: false,
     parts: [
       { id: 'snow', geo: at(G.sph(1.15, 12, 6), { y: 0.04, sy: 0.16 }), color: 0xf2f8ff, rough: 0.95 },
     ],
   },
-  basalt: {
+  basalt: { solid: true,
     parts: [
       { id: 'column', color: 0x4a3a34, rough: 0.95, geo: mergeAll([
         at(G.hex(0.42, 3.0), { y: 1.5 }),
@@ -424,14 +424,14 @@ const BUILDERS = {
       ]) },
     ],
   },
-  vent: {
+  vent: { solid: true,
     parts: [
       { id: 'ring', geo: at(G.torus(0.7, 0.26, 9), { y: 0.2, rx: Math.PI / 2 }), color: 0x3a2f2a, rough: 0.95 },
       { id: 'lava', geo: at(G.cone(0.5, 0.5, 8), { y: 0.34 }), color: 0xff7a2a, rough: 0.4,
         emissive: 0xff5a10, emissiveI: 2.4 },
     ],
   },
-  lily: {
+  lily: { solid: false,
     parts: [
       { id: 'pad', color: 0x3f7f4a, rough: 0.7, geo: mergeAll([
         at(G.cyl(0.55, 0.5, 0.09, 10), { y: 0.05 }),
@@ -439,7 +439,7 @@ const BUILDERS = {
       ]) },
     ],
   },
-  spore: {
+  spore: { solid: false,
     parts: [
       { id: 'ball', geo: G.ico(0.16, 1), color: 0xa0ffd0, rough: 0.4, noShadow: true,
         emissive: 0x40ffa0, emissiveI: 1.8, float: [1.0, 2.6] },

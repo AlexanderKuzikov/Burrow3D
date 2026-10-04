@@ -72,22 +72,23 @@ window.BIOMES = {
       grain: 0.11, mottle: 0.09, speckle: 0.12,
     },
     scatter: {
+      // свободная клетка проходима: только то, что переступается
       free: [
-        { b: 'conifer', per: 0.42, layer: 'plants', scale: [0.75, 1.45], jitter: 0.9, tilt: 0.05,
-          dens: { freq: 0.07, bias: 0.42, gain: 1.0 },
-          colors: { low: [0x25501f, 0x357028], top: [0x2c5c22, 0x3f7f2c], trunk: [0x4e3820, 0x63482a] } },
-        { b: 'broadleaf', per: 0.18, layer: 'plants', scale: [0.8, 1.5], jitter: 0.9, tilt: 0.06,
-          colors: { crown: [0x3d7a24, 0x59a032], crown2: [0x356c20, 0x4e8f2c], trunk: [0x54391f, 0x6b4a2a] } },
-        { b: 'tuft', per: 3, layer: 'plants', scale: [0.6, 1.55], jitter: 1,
+        { b: 'tuft', per: 4, layer: 'plants', scale: [0.6, 1.55], jitter: 1,
           colors: { blade: [0x4f8a2c, 0x76b047] } },
+        { b: 'scrub', per: 0.10, layer: 'plants', scale: [0.5, 1.1], jitter: 1,
+          colors: { bush: [0x5f8a3a, 0x7bab55] } },
       ],
       road: [
         { b: 'pebble', per: 0.09, layer: 'rocks', scale: [0.45, 1.0], jitter: 0.95 },
       ],
       blocked: [
+        // занятая клетка: непроходимое
         { b: 'conifer', per: 0.55, layer: 'plants', scale: [0.8, 1.55], jitter: 0.9, tilt: 0.05,
           dens: { freq: 0.07, bias: 0.5, gain: 1.0 },
           colors: { low: [0x1f4a1c, 0x2f6b24], top: [0x275a20, 0x3a7d2a], trunk: [0x452f1c, 0x583a24] } },
+        { b: 'broadleaf', per: 0.34, layer: 'plants', scale: [0.8, 1.5], jitter: 0.9, tilt: 0.06,
+          colors: { crown: [0x3d7a24, 0x59a032], crown2: [0x356c20, 0x4e8f2c], trunk: [0x54391f, 0x6b4a2a] } },
         { b: 'tuft', per: 1.2, layer: 'plants', scale: [0.5, 1.2], jitter: 1,
           colors: { blade: [0x3d6f24, 0x5d8f39] } },
         { b: 'pebble', per: 0.05, layer: 'rocks', scale: [0.4, 0.9], jitter: 0.95 },
@@ -119,8 +120,6 @@ window.BIOMES = {
     },
     scatter: {
       free: [
-        { b: 'cactus', per: 0.10, layer: 'plants', scale: [0.7, 1.5], jitter: 0.85,
-          colors: { body: [0x4a7a52, 0x66966a], arm: [0x447049, 0x5c8a5c] } },
         { b: 'scrub', per: 0.22, layer: 'plants', scale: [0.6, 1.4], jitter: 1,
           colors: { bush: [0x8a7a45, 0xa89463] } },
         { b: 'tuft', per: 1.4, layer: 'plants', scale: [0.5, 1.1], jitter: 1,
@@ -132,6 +131,8 @@ window.BIOMES = {
         { b: 'scrub', per: 0.03, layer: 'plants', scale: [0.5, 1.0], jitter: 1 },
       ],
       blocked: [
+        { b: 'cactus', per: 0.16, layer: 'plants', scale: [0.7, 1.5], jitter: 0.85,
+          colors: { body: [0x4a7a52, 0x66966a], arm: [0x447049, 0x5c8a5c] } },
         { b: 'boulder', per: 0.30, layer: 'rocks', scale: [0.8, 1.9], jitter: 0.9, tilt: 0.2, colors: { rock: [0x9a7c52, 0xc0a06e] } },
         { b: 'scrub', per: 0.12, layer: 'plants', scale: [0.5, 1.1], jitter: 1 },
       ], },
@@ -162,21 +163,19 @@ window.BIOMES = {
     },
     scatter: {
       free: [
-        { b: 'pine', per: 0.28, layer: 'plants', scale: [0.7, 1.35], jitter: 0.9, tilt: 0.07,
-          dens: { freq: 0.06, bias: 0.35, gain: 0.9 },
-          colors: { low: [0x1e3f2a, 0x2c5a3a], mid: [0x24492f, 0x336641], top: [0x2b5537, 0x3c7049], trunk: [0x453020, 0x573f2a] } },
-        { b: 'tuft', per: 2, layer: 'plants', scale: [0.5, 1.2], jitter: 1,
+        { b: 'tuft', per: 2.5, layer: 'plants', scale: [0.5, 1.2], jitter: 1,
           colors: { blade: [0x5d8a4a, 0x86ab63] } },
-        { b: 'boulder', per: 0.08, layer: 'rocks', scale: [0.6, 1.4], jitter: 0.9, tilt: 0.25, colors: { rock: [0x6e7379, 0x8f959c] } },
       ],
       road: [
         { b: 'pebble', per: 0.14, layer: 'rocks', scale: [0.45, 1.05], jitter: 0.95, colors: { rock: [0x6e7379, 0x8f959c] } },
       ],
       blocked: [
-        { b: 'boulder', per: 0.45, layer: 'rocks', scale: [0.9, 2.2], jitter: 0.9, tilt: 0.3, colors: { rock: [0x6e7379, 0x8f959c] } },
+        { b: 'boulder', per: 0.55, layer: 'rocks', scale: [0.9, 2.2], jitter: 0.9, tilt: 0.3, colors: { rock: [0x6e7379, 0x8f959c] } },
         { b: 'drift', per: 0.18, layer: 'props', scale: [0.7, 1.4], jitter: 0.95,
           colors: { snow: [0xe8f0f8, 0xfdfeff] } },
-        { b: 'pine', per: 0.16, layer: 'plants', scale: [0.6, 1.15], jitter: 0.9, tilt: 0.07 },
+        { b: 'pine', per: 0.34, layer: 'plants', scale: [0.65, 1.3], jitter: 0.9, tilt: 0.07,
+          dens: { freq: 0.06, bias: 0.35, gain: 0.9 },
+          colors: { low: [0x1e3f2a, 0x2c5a3a], mid: [0x24492f, 0x336641], top: [0x2b5537, 0x3c7049], trunk: [0x453020, 0x573f2a] } },
       ], },
     },
 
@@ -205,21 +204,21 @@ window.BIOMES = {
     },
     scatter: {
       free: [
-        { b: 'cactus', per: 0.06, layer: 'plants', scale: [0.6, 1.3], jitter: 0.85,
-          colors: { body: [0x6b5a3a, 0x8a7550], arm: [0x60503a, 0x7d6a48] } },
-        { b: 'boulder', per: 0.12, layer: 'rocks', scale: [0.7, 1.7], jitter: 0.9, tilt: 0.25, colors: { rock: [0x4e3527, 0x6d4a34] } },
-        { b: 'scrub', per: 0.08, layer: 'plants', scale: [0.5, 1.1], jitter: 1,
+        { b: 'scrub', per: 0.14, layer: 'plants', scale: [0.5, 1.1], jitter: 1,
           colors: { bush: [0x7a5a42, 0x967050] } },
-        { b: 'crystal', per: 0.03, layer: 'props', scale: [0.6, 1.2], jitter: 0.9,
-          colors: { shard: 0xd9a0ff }, glow: { shard: [0x7a3ab0, 0.9] } },
+        { b: 'tuft', per: 0.8, layer: 'plants', scale: [0.45, 1.0], jitter: 1,
+          colors: { blade: [0x8a6248, 0xa87d5c] } },
       ],
       road: [
         { b: 'pebble', per: 0.20, layer: 'rocks', scale: [0.45, 1.1], jitter: 0.95, colors: { rock: [0x4e3527, 0x6d4a34] } },
       ],
       blocked: [
+        { b: 'cactus', per: 0.10, layer: 'plants', scale: [0.6, 1.3], jitter: 0.85,
+          colors: { body: [0x6b5a3a, 0x8a7550], arm: [0x60503a, 0x7d6a48] } },
         { b: 'basalt', per: 0.35, layer: 'rocks', scale: [0.7, 1.8], jitter: 0.9, tilt: 0.12 },
         { b: 'boulder', per: 0.28, layer: 'rocks', scale: [0.8, 2.0], jitter: 0.9, tilt: 0.3, colors: { rock: [0x4e3527, 0x6d4a34] } },
-        { b: 'crystal', per: 0.05, layer: 'props', scale: [0.6, 1.3], jitter: 0.9 },
+        { b: 'crystal', per: 0.07, layer: 'props', scale: [0.6, 1.3], jitter: 0.9,
+          colors: { shard: 0xd9a0ff }, glow: { shard: [0x7a3ab0, 0.9] } },
       ], },
     },
 
@@ -291,9 +290,7 @@ window.BIOMES = {
     },
     scatter: {
       free: [
-        { b: 'iceSpike', per: 0.14, layer: 'rocks', scale: [0.7, 1.7], jitter: 0.9, tilt: 0.1,
-          colors: { spike: [0x9fd0ea, 0xd8f0ff] } },
-        { b: 'drift', per: 0.28, layer: 'props', scale: [0.8, 1.8], jitter: 0.95,
+        { b: 'drift', per: 0.30, layer: 'props', scale: [0.8, 1.8], jitter: 0.95,
           colors: { snow: [0xeaf2fa, 0xffffff] } },
         { b: 'tuft', per: 0.6, layer: 'plants', scale: [0.45, 1.0], jitter: 1,
           colors: { blade: [0x8aa89a, 0xa8c4b4] } },
@@ -303,7 +300,8 @@ window.BIOMES = {
         { b: 'drift', per: 0.10, layer: 'props', scale: [0.6, 1.3], jitter: 0.95 },
       ],
       blocked: [
-        { b: 'iceSpike', per: 0.45, layer: 'rocks', scale: [0.9, 2.3], jitter: 0.9, tilt: 0.12 },
+        { b: 'iceSpike', per: 0.60, layer: 'rocks', scale: [0.85, 2.3], jitter: 0.9, tilt: 0.12,
+          colors: { spike: [0x9fd0ea, 0xd8f0ff] } },
         { b: 'drift', per: 0.40, layer: 'props', scale: [1.0, 2.2], jitter: 0.95 },
         { b: 'crystal', per: 0.06, layer: 'props', scale: [0.6, 1.3], jitter: 0.9,
           colors: { shard: 0xbfe8ff }, glow: { shard: [0x4a9ad0, 0.8] } },
