@@ -48,15 +48,19 @@
   .legend select{flex:0 0 auto;min-width:34px;text-align:center}
 
   .btns{display:flex;flex-wrap:wrap;gap:6px}
-  button,select{font:inherit;font-size:11.5px;color:var(--txt);cursor:pointer;
+  button,select,.filebtn{font:inherit;font-size:11.5px;color:var(--txt);cursor:pointer;
     background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:999px;
     padding:5px 10px;transition:.15s background,.15s border-color,.15s color}
-  button:hover,select:hover{background:rgba(255,255,255,.14)}
+  button:hover,select:hover,.filebtn:hover{background:rgba(255,255,255,.14)}
   button.on{background:rgba(111,195,255,.20);border-color:rgba(111,195,255,.55);color:#dff1ff}
   select{padding:5px 8px}
   select option{background:#131a20;color:var(--txt)}
-  .filebtn{position:relative;overflow:hidden}
+  /* подпись с прозрачным input поверх — кнопка выбора файла. Без явного
+     display она была обычным текстом: в блоке с одной кнопкой это не бросалось
+     в глаза, а с двумя строка панели ломалась. */
+  .filebtn{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center}
   .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+  #bar .filebtn{flex:1 1 auto}
 
   .keys{color:var(--dim);font-size:11.5px}
   .keys b{color:#cfdae2;font-weight:600}
@@ -105,7 +109,8 @@
   <div id="bar" class="glass">
     <div class="name"><em>Burrow3D</em><span id="mapmeta">—</span></div>
     <label class="filebtn">Загрузить .json<input type="file" id="file" accept=".json,application/json"></label>
-    <select id="selMap" title="Встроенные карты"></select>
+    <label class="filebtn" title="Все .json из выбранной папки — обычно той же, где лежит эта страница">Из папки<input type="file" id="dir" webkitdirectory multiple></label>
+    <select id="selMap" title="Встроенные карты и карты из папки"></select>
     <select id="selBiome" title="Набор объектов"></select>
     <button id="bSave" class="grow" title="Скачать карту с текущей легендой">Сохранить</button>
   </div>
@@ -1179,14 +1184,24 @@ const _v2 = new T.Vector3();
 
 /* ══════════════════════════ 14. интерфейс ══════════════════════════ */
 
-const selMap = $('selMap'), selBiome = $('selBiome'), fileIn = $('file');
+const selMap = $('selMap'), selBiome = $('selBiome'), fileIn = $('file'), dirIn = $('dir');
 const bFree = $('bFree'), bReset = $('bReset'), bSave = $('bSave');
 const bPlants = $('bPlants'), bRocks = $('bRocks'), bProps = $('bProps'), bShadow = $('bShadow');
 const lsel = [...document.querySelectorAll('.lsel')];
 const noteEl = $('note'), note2 = $('note2'), statEl = $('stat'), fpsEl = $('fps');
 const mapMeta = $('mapmeta'), dropEl = $('drop');
 
-DEMO.forEach((m, i) => { const o = document.createElement('option'); o.value = i; o.textContent = m.name; selMap.appendChild(o); });
+/* Список карт в окне выбора: встроенные демо и всё, что взято из папки.
+   POOL отделён от DEMO, чтобы «встроенные» остались именно встроенными. */
+const POOL = DEMO.slice();
+const mapOption = m => {
+  const o = document.createElement('option');
+  o.value = POOL.length;
+  o.textContent = m.name;
+  POOL.push(m);
+  selMap.appendChild(o);
+};
+DEMO.forEach(mapOption);
 BIOME_KEYS.forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = BIOMES[k].name; selBiome.appendChild(o); });
 selBiome.value = S.biome;
 
@@ -1213,7 +1228,7 @@ function paintUI() {
   }
 }
 
-selMap.onchange = () => { if (selMap.value !== 'custom') loadMap(DEMO[+selMap.value]); };
+selMap.onchange = () => { if (selMap.value !== 'custom') loadMap(POOL[+selMap.value]); };
 function markCustom(name) {
   let o = selMap.querySelector('option[value="custom"]');
   if (!o) { o = document.createElement('option'); o.value = 'custom'; o.disabled = true; selMap.appendChild(o); }
@@ -1290,6 +1305,29 @@ fileIn.onchange = e => {
   fr.readAsText(f);
 };
 
+/* ── карты из своей папки ──
+   Браузер не умеет перечислять файлы в каталоге, а `fetch` на `file://`
+   заблокирован, поэтому «взять все .json рядом» можно только одним жестом —
+   выбрать папку. Обычно это та же папка, где лежит эта страница. */
+dirIn.onchange = async () => {
+  const files = [...dirIn.files].filter(f => /\.json$/i.test(f.name));
+  dirIn.value = '';                       // иначе повторный выбор той же папки не сработает
+  if (!files.length) return;
+  const bad = [], added = [];
+  for (const f of files) {
+    let m;
+    try { m = parseMap(await f.text()); }
+    catch (err) { bad.push(f.name + ' — ' + err.message); continue; }
+    m.name = f.name.replace(/\.json$/i, '');       // узнаваемое имя — имя файла
+    mapOption(m);
+    added.push(m);
+  }
+  for (const b of bad) console.warn('[Burrow3D] не карта:', b);
+  if (!added.length) { fatal('В папке нет карт', bad.slice(0, 6).map(esc).join('<br>')); return; }
+  selMap.value = String(POOL.indexOf(added[0]));
+  loadMap(added[0]);
+};
+
 let dragDepth = 0;
 addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) dropEl.classList.add('on'); });
 addEventListener('dragover', e => e.preventDefault());
@@ -1343,9 +1381,9 @@ renderer.setAnimationLoop(() => {
 /* ══════════════════════════ 16. старт ══════════════════════════ */
 
 function boot() {
-  if (!DEMO.length) { fatal('Нет встроенных карт', 'maps.js не загрузился'); return; }
+  if (!POOL.length) { fatal('Нет встроенных карт', 'maps.js не загрузился'); return; }
   if (!BIOME_KEYS.length) { fatal('Нет наборов объектов', 'biomes.js не загрузился'); return; }
-  loadMap(DEMO[0]);
+  loadMap(POOL[0]);
   window.__MAP_READY = true;
   const l = $('loader');
   requestAnimationFrame(() => l.classList.add('gone'));

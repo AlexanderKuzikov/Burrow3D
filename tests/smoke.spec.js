@@ -9,6 +9,8 @@
    ------------------------------------------------------------------------- */
 
 'use strict';
+const fs = require('fs');
+const path = require('path');
 const { test, expect } = require('@playwright/test');
 
 /** Ошибки страницы, которые считаем падением. favicon и CDN-шум — нет. */
@@ -268,6 +270,81 @@ test.describe('Burrow3D', () => {
 
     expect(seen.length, 'наборы не прогнались').toBe(maps.length * biomes.length);
     expect(bad, 'рельеф поехал:\n  ' + bad.join('\n  ')).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test('карты из своей папки попадают в список', async ({ page }) => {
+    const errors = collectErrors(page);
+    await boot(page, errors);
+
+    /* Браузер не умеет перечислять файлы в каталоге, а fetch на file:// заблокирован,
+       поэтому карты рядом со страницей берутся одним жестом — выбором папки.
+       Проверяем разбор, переименование по файлу и то, что мусор не ломает страницу. */
+    const dir = path.join(__dirname, '..', 'test-results', 'maps');
+    fs.mkdirSync(dir, { recursive: true });
+    const good = path.join(dir, 'alpha.json');
+    const junk = path.join(dir, 'not-a-map.json');
+    const W = 12, H = 8;
+    const grid = Array.from({ length: H }, (_, y) =>
+      (y === 0 || y === H - 1 ? '#' : '.').repeat(W).split('')
+        .map((c, x) => (c === '#' || x === 3 || x === 8 ? '#' : '.')).join(''));
+    fs.writeFileSync(good, JSON.stringify({ name: 'ignored-name', width: W, height: H, grid }));
+    fs.writeFileSync(junk, JSON.stringify({ hello: 'world' }));
+
+    const before = await page.evaluate(() => window.BURROW.DEMO.length);
+    // webkitdirectory принимает только путь к папке — это и есть реальный сценарий
+    await page.setInputFiles('#dir', dir);
+    await page.waitForTimeout(400);
+
+    const info = await page.evaluate(() => {
+      const B = window.BURROW;
+      const sel = document.getElementById('selMap');
+      return {
+        name: B.S.map.name, w: B.S.map.w, h: B.S.map.h,
+        poolSize: sel.options.length,
+        selected: sel.options[sel.selectedIndex]?.textContent,
+        demoUntouched: B.DEMO.length,
+      };
+    });
+    expect(info.name).toBe('alpha');            // имя из файла, а не из JSON
+    expect(info.w).toBe(W);
+    expect(info.h).toBe(H);
+    expect(info.demoUntouched).toBe(before);    // встроенный список не тронут
+    expect(info.selected).toBe('alpha');
+    expect(errors, 'мусорный .json не должен ломать страницу').toEqual([]);
+  });
+
+  test('собранный файл самодостаточен: ни одного запроса наружу', async ({ page }) => {
+    const dist = path.join(__dirname, '..', 'dist', 'burrow3d.html');
+    test.skip(!fs.existsSync(dist), 'нет dist/burrow3d.html — сначала npm run build');
+
+    /* Главное свойство артефакта: открывается по file:// и не ходит в сеть.
+       Проверяем именно сеть — иначе случайно вернувшийся CDN не заметят. */
+    const external = [];
+    page.on('request', r => {
+      const u = r.url();
+      if (!/^(file|data|blob):/.test(u)) external.push(u);
+    });
+    const errors = collectErrors(page);
+
+    await page.goto('file:///' + dist.replace(/\\/g, '/'));
+    await page.waitForFunction(() => window.__MAP_READY === true, null, { timeout: 60_000 });
+    await page.waitForFunction(() => window.BURROW.renderer.info.render.frame > 5, null, { timeout: 60_000 });
+
+    const info = await page.evaluate(() => {
+      const B = window.BURROW;
+      let instanced = 0, terrain = false;
+      B.scene.traverse(o => {
+        if (o.isInstancedMesh) instanced++;
+        if (o.isMesh && o.material.map) terrain = true;
+      });
+      return { maps: B.DEMO.length, biomes: Object.keys(B.BIOMES).length, instanced, terrain };
+    });
+    expect(info.maps).toBeGreaterThanOrEqual(3);      // карты вложены в файл
+    expect(info.biomes).toBeGreaterThanOrEqual(7);    // наборы вложены в файл
+    expect(info.terrain).toBe(true);
+    expect(info.instanced).toBeGreaterThan(0);
+    expect(external, 'артефакт ходит в сеть: ' + external.join(', ')).toEqual([]);
     expect(errors).toEqual([]);
   });
 

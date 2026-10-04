@@ -1,11 +1,12 @@
 {
   "name": "burrow3d",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "ASCII-карта → объёмная местность на Three.js. Сборки нет, зависимости только для тестов.",
   "scripts": {
     "serve": "python -m http.server 8801 --bind 127.0.0.1",
     "check": "node scripts/check.js",
+    "build": "node scripts/build.js",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
   },
