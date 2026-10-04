@@ -542,7 +542,12 @@ function metricsFor(map) {
   const PX = TW * CELL, PZ = TH * CELL;
   return {
     CELL, MX, MZ, ring, TW, TH, PX, PZ,
-    offX: -MX / 2 - ring * CELL, offZ: -MZ / 2 - ring * CELL,
+    // Два разных начала координат, и их нельзя смешивать:
+  //   originX — левый край САМОЙ КАРТЫ; от него считаются клетки
+  //   planeX  — левый край ПОЛОТНА (карта + поле вокруг); от него считается текстура
+  // Путаница между ними сдвигает сцену относительно карты на ring клеток.
+  originX: -MX / 2, originZ: -MZ / 2,
+  planeX: -MX / 2 - ring * CELL, planeZ: -MZ / 2 - ring * CELL,
     segX: clamp(Math.round(PX / 1.1), 24, 360), segZ: clamp(Math.round(PZ / 1.1), 24, 360),
     span: Math.max(PX, PZ),
     // кадрирование и туман считаем от размера карты: иначе набор без воды
@@ -551,8 +556,8 @@ function metricsFor(map) {
   };
 }
 const cellOf = (x, z) => [
-  Math.floor((x - S.M.offX) / CELL),
-  Math.floor((z - S.M.offZ) / CELL),
+  Math.floor((x - S.M.originX) / CELL),
+  Math.floor((z - S.M.originZ) / CELL),
 ];
 
 /* ══════════════════════════ 5. карта ══════════════════════════ */
@@ -663,7 +668,7 @@ function boxBlur(src, w, h, r, passes) {
 
 function maskAt(mask, x, z) {
   const M = S.M;
-  const fx = (x - M.offX) / CELL - 0.5, fz = (z - M.offZ) / CELL - 0.5;
+  const fx = (x - M.originX) / CELL - 0.5, fz = (z - M.originZ) / CELL - 0.5;
   const w = S.map.w, h = S.map.h;
   if (fx < -1 || fz < -1 || fx > w || fz > h) return 0;
   const x0 = clamp(Math.floor(fx), 0, w - 1), x1 = clamp(x0 + 1, 0, w - 1);
@@ -802,8 +807,8 @@ function buildScatter() {
           }
           for (let k = 0; k < count; k++) {
             const j = spec.jitter === undefined ? 0.9 : spec.jitter;
-            const wx = M.offX + (cx + 0.5 + (rnd() * 2 - 1) * 0.5 * j) * CELL;
-            const wz = M.offZ + (cy + 0.5 + (rnd() * 2 - 1) * 0.5 * j) * CELL;
+            const wx = M.originX + (cx + 0.5 + (rnd() * 2 - 1) * 0.5 * j) * CELL;
+            const wz = M.originZ + (cy + 0.5 + (rnd() * 2 - 1) * 0.5 * j) * CELL;
             const sc = Array.isArray(spec.scale) ? lerp(spec.scale[0], spec.scale[1], rnd())
                      : (spec.scale === undefined ? 1 : spec.scale);
             places.push({
@@ -1011,8 +1016,8 @@ function drawMinimap() {
   mctx.imageSmoothingEnabled = false;
   mctx.clearRect(0, 0, map.w, map.h);
   mctx.drawImage(mmBase, 0, 0);
-  const px = (camera.position.x - S.M.offX) / CELL;
-  const py = (camera.position.z - S.M.offZ) / CELL;
+  const px = (camera.position.x - S.M.originX) / CELL;
+  const py = (camera.position.z - S.M.originZ) / CELL;
   const dir = camera.getWorldDirection(_v1);
   const a = Math.atan2(dir.z, dir.x);
   const fov = camera.fov * Math.PI / 180;
@@ -1028,7 +1033,7 @@ const _v1 = new T.Vector3();
 mmc.addEventListener('click', e => {
   const r = mmc.getBoundingClientRect();
   const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
-  const wx = S.M.offX + fx * S.map.w * CELL, wz = S.M.offZ + fy * S.map.h * CELL;
+  const wx = S.M.originX + fx * S.map.w * CELL, wz = S.M.originZ + fy * S.map.h * CELL;
   if (fly.on) exitFly();
   const ty = terrainH(wx, wz);
   controls.target.set(wx, ty, wz);

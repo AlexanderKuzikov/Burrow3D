@@ -68,14 +68,14 @@ window.BIOMES = {
       rimStart: 0.60, rimDrop: 26, base: 0,
     },
     ground: {
-      free: [0x63903c, 0x8ab457], road: [0x8c7047, 0xb59463], blocked: [0x3f6d28, 0x5c8a3c],
+      free: [0x63903c, 0x8ab457], road: [0x8c7047, 0xb59463], blocked: [0x4a5a2c, 0x6b7a3a],
       grain: 0.11, mottle: 0.09, speckle: 0.12,
     },
     scatter: {
       // свободная клетка проходима: только то, что переступается
       free: [
-        { b: 'tuft', per: 4, layer: 'plants', scale: [0.6, 1.55], jitter: 1,
-          colors: { blade: [0x4f8a2c, 0x76b047] } },
+        { b: 'tuft', per: 2.6, layer: 'plants', scale: [0.55, 1.25], jitter: 1,
+          colors: { blade: [0x6b9a41, 0x82ad52] } },
         { b: 'scrub', per: 0.10, layer: 'plants', scale: [0.5, 1.1], jitter: 1,
           colors: { bush: [0x5f8a3a, 0x7bab55] } },
       ],
@@ -83,14 +83,15 @@ window.BIOMES = {
         { b: 'pebble', per: 0.09, layer: 'rocks', scale: [0.45, 1.0], jitter: 0.95 },
       ],
       blocked: [
-        // занятая клетка: непроходимое
-        { b: 'conifer', per: 0.55, layer: 'plants', scale: [0.8, 1.55], jitter: 0.9, tilt: 0.05,
+        // занятая клетка: непроходимое. Плотно, иначе читается как пустой участок
+        { b: 'conifer', per: 0.92, layer: 'plants', scale: [0.85, 1.6], jitter: 0.9, tilt: 0.05,
           dens: { freq: 0.07, bias: 0.5, gain: 1.0 },
           colors: { low: [0x1f4a1c, 0x2f6b24], top: [0x275a20, 0x3a7d2a], trunk: [0x452f1c, 0x583a24] } },
-        { b: 'broadleaf', per: 0.34, layer: 'plants', scale: [0.8, 1.5], jitter: 0.9, tilt: 0.06,
+        { b: 'broadleaf', per: 0.55, layer: 'plants', scale: [0.85, 1.55], jitter: 0.9, tilt: 0.06,
           colors: { crown: [0x3d7a24, 0x59a032], crown2: [0x356c20, 0x4e8f2c], trunk: [0x54391f, 0x6b4a2a] } },
-        { b: 'tuft', per: 1.2, layer: 'plants', scale: [0.5, 1.2], jitter: 1,
-          colors: { blade: [0x3d6f24, 0x5d8f39] } },
+        // подлесок, а не трава: на тёмном полу светлая крошка читается как мусор
+        { b: 'scrub', per: 0.9, layer: 'plants', scale: [0.6, 1.35], jitter: 1,
+          colors: { bush: [0x2f5220, 0x40682c] } },
         { b: 'pebble', per: 0.05, layer: 'rocks', scale: [0.4, 0.9], jitter: 0.95 },
       ], },
     },

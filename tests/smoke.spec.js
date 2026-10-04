@@ -127,6 +127,66 @@ test.describe('Burrow3D', () => {
     expect(errors).toEqual([]);
   });
 
+  test('клетка, мир и текстура стоят в одной системе координат', async ({ page }) => {
+    const errors = collectErrors(page);
+    await boot(page, errors);
+
+    /* Главная проверка на рассогласование слоёв: клетка → мировая точка →
+       обратно в клетку обязана вернуть ту же клетку. Раньше начало координат
+       у полотна и у карты совпадало, и карта уезжала на ring клеток. */
+    const rt = await page.evaluate(() => {
+      const B = window.BURROW, S = B.S, M = S.M;
+      const cellToWorld = (cx, cy) => [M.originX + (cx + 0.5) * M.CELL, M.originZ + (cy + 0.5) * M.CELL];
+      const worldToCell = (x, z) => [Math.floor((x - M.originX) / M.CELL), Math.floor((z - M.originZ) / M.CELL)];
+      const bad = [];
+      for (const [cx, cy] of [[0, 0], [1, 1], [S.map.w - 1, 0], [0, S.map.h - 1],
+                              [S.map.w - 1, S.map.h - 1], [S.map.w >> 1, S.map.h >> 1]]) {
+        const [x, z] = cellToWorld(cx, cy);
+        const [bx, by] = worldToCell(x, z);
+        if (bx !== cx || by !== cy) bad.push(`${cx},${cy} -> ${bx},${by}`);
+      }
+      return { bad, originX: M.originX, ring: M.ring, planeX: M.planeX };
+    });
+    expect(rt.bad, 'клетка и мир разошлись: ' + rt.bad.join('; ')).toEqual([]);
+
+    /* Второй слой: текстура в точке клетки обязана показывать тип этой клетки.
+       Цвета берём не «похожими», а напрямую из данных палитры, а тип
+       определяем тем, какая из трёх пар цветов ближе всего к пикселю. */
+    const tex = await page.evaluate(() => {
+      const B = window.BURROW, S = B.S, M = S.M;
+      let t = null;
+      B.scene.traverse(o => { if (o.isMesh && o.material.map) t = o.material.map; });
+      const img = t.image, d = img.data, TW = img.width, TH = img.height;
+      const TYPE = ['free', 'road', 'blocked'];
+      const hex2rgb = h => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+      const pal = TYPE.map(k => S.ground[k].map(c => hex2rgb(c.toString(16))));
+      const d2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+      const near = rgb => pal.map(p => Math.min(...p.map(c => d2(rgb, c)))).indexOf(
+        Math.min(...pal.map(p => Math.min(...p.map(c => d2(rgb, c))))));
+      let bad = 0, n = 0, first = null;
+      // шаг 3 — не ловим границы клеток
+      for (let cy = 0; cy < S.map.h; cy += 3) {
+        for (let cx = 0; cx < S.map.w; cx += 3) {
+          const x = M.originX + (cx + 0.5) * M.CELL, z = M.originZ + (cy + 0.5) * M.CELL;
+          const u = (x + M.PX / 2) / M.PX, v = (z + M.PZ / 2) / M.PZ;
+          const tx = Math.floor(u * TW), ty = Math.floor(v * TH);
+          if (tx < 0 || ty < 0 || tx >= TW || ty >= TH) continue;
+          const i = (ty * TW + tx) * 4;
+          const drawn = near([d[i], d[i + 1], d[i + 2]]);
+          const data = S.type[cy * S.map.w + cx];
+          n++;
+          if (drawn !== data) { bad++; if (!first) first = `${cx},${cy}: данные ${TYPE[data]}, нарисовано ${TYPE[drawn]}`; }
+        }
+      }
+      return { bad, n, first, pct: +(bad / n * 100).toFixed(1) };
+    });
+    // цвета «плям» приглушены шумом, поэтому небольшой процент — норма,
+    // но треть сетки означала бы сдвиг слоя
+    expect(tex.pct, `текстура разошлась с данными на ${tex.pct}% (${tex.first})`).toBeLessThan(8);
+
+    expect(errors).toEqual([]);
+  });
+
   test('слои выключаются и включаются обратно', async ({ page }) => {
     const errors = collectErrors(page);
     await boot(page, errors);
