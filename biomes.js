@@ -111,7 +111,7 @@ window.BIOMES = {
       detAmp: 1.2, detFreq: 0.085,
       roadFlatten: 0.80, roadSink: 0.45,
       blockedLift: 2.5, blockedFlat: 0.3,
-      rimStart: 0.52, rimDrop: 30, base: 0,
+      rimStart: 0.62, rimDrop: 22, base: 0,
     },
     ground: {
       free: [0xc4a067, 0xead094], road: [0xa88a5e, 0xcbb083], blocked: [0x8a6f4a, 0xb59468],
@@ -197,7 +197,7 @@ window.BIOMES = {
       detAmp: 1.7, detFreq: 0.1,
       roadFlatten: 0.84, roadSink: 0.6,
       blockedLift: 4, blockedFlat: 0.15,
-      rimStart: 0.48, rimDrop: 34, base: 0,
+      rimStart: 0.58, rimDrop: 26, base: 0,
     },
     ground: {
       free: [0x9c4f2c, 0xc4703f], road: [0x7d3f24, 0xa35a33], blocked: [0x5e2f1c, 0x7d4429],
@@ -327,7 +327,7 @@ window.BIOMES = {
       detAmp: 1.4, detFreq: 0.115,
       roadFlatten: 0.78, roadSink: 0.9,
       blockedLift: 3.5, blockedFlat: 0.25,
-      rimStart: 0.55, rimDrop: 28, base: 0,
+      rimStart: 0.62, rimDrop: 22, base: 0,
     },
     ground: {
       free: [0x50684a, 0x76916a], road: [0x6f6684, 0x968ba8], blocked: [0x42593c, 0x5f7a54],

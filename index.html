@@ -535,7 +535,9 @@ const CELL = 2;
 
 function metricsFor(map) {
   const MX = map.w * CELL, MZ = map.h * CELL;
-  const ring = Math.max(6, Math.round(Math.max(map.w, map.h) * 0.14));
+  const b = BIOMES[S.biome] || {};
+  const base = Math.max(6, Math.round(Math.max(map.w, map.h) * 0.14));
+  const ring = b.water ? base : Math.max(base, Math.round(Math.max(map.w, map.h) * 0.32));
   const TW = map.w + ring * 2, TH = map.h + ring * 2;
   const PX = TW * CELL, PZ = TH * CELL;
   return {
@@ -543,6 +545,9 @@ function metricsFor(map) {
     offX: -MX / 2 - ring * CELL, offZ: -MZ / 2 - ring * CELL,
     segX: clamp(Math.round(PX / 1.1), 24, 360), segZ: clamp(Math.round(PZ / 1.1), 24, 360),
     span: Math.max(PX, PZ),
+    // кадрирование и туман считаем от размера карты: иначе набор без воды
+    // с широким полем отодвигает камеру и карта уходит на второй план пятном вдали
+    frame: Math.max(MX, MZ),
   };
 }
 const cellOf = (x, z) => [
@@ -680,7 +685,7 @@ function terrainH(x, z) {
   h *= 1 - R.roadFlatten * road - (R.blockedFlat || 0) * blk;
   h += (R.blockedLift || 0) * blk;
   h -= R.roadSink * road;
-  const e = Math.max(Math.abs(x) / (M.PX / 2), Math.abs(z) / (M.PZ / 2));
+  const e = Math.hypot(x / (M.PX / 2), z / (M.PZ / 2));
   h -= smoothstep(R.rimStart, 1, e) * R.rimDrop;
   return h + (R.base || 0);
 }
@@ -901,7 +906,7 @@ function applyBiome() {
   skyMat.uniforms.sunDir.value.copy(SUN_DIR);
 
   scene.fog.color.setHex(skyD.fog, T.SRGBColorSpace);
-  if (skyD.fogK) { scene.fog.near = S.M.span * skyD.fogK[0]; scene.fog.far = S.M.span * skyD.fogK[1]; }
+  if (skyD.fogK) { scene.fog.near = S.M.frame * skyD.fogK[0]; scene.fog.far = S.M.frame * skyD.fogK[1]; }
   else { scene.fog.near = skyD.fogNear; scene.fog.far = skyD.fogFar; }
   renderer.toneMappingExposure = skyD.exposure;
 
@@ -913,10 +918,10 @@ function applyBiome() {
   fill.color.setHex(skyD.fill, T.SRGBColorSpace);
   fill.intensity = skyD.fillI;
 
-  const M = S.M, r = M.span * 0.62;
+  const M = S.M, r = M.frame * 0.62;
   sun.shadow.camera.left = -r; sun.shadow.camera.right = r;
   sun.shadow.camera.top = r; sun.shadow.camera.bottom = -r;
-  sun.shadow.camera.near = 20; sun.shadow.camera.far = M.span * 4;
+  sun.shadow.camera.near = 20; sun.shadow.camera.far = M.frame * 4;
   sun.shadow.camera.updateProjectionMatrix();
 
   if (envRT) envRT.dispose();
@@ -957,12 +962,12 @@ function rebuild(keepCamera) {
   applyLayers();
 
   if (!keepCamera) {
-    const M = S.M, span = M.span;
+    const M = S.M, span = M.frame;
     S.home.tgt.set(0, terrainH(0, 0), 0);
-    S.home.pos.set(span * 0.38, span * 0.30, span * 0.42);
+    S.home.pos.set(span * 0.55, span * 0.44, span * 0.60);
     camera.position.copy(S.home.pos);
     controls.target.copy(S.home.tgt);
-    controls.maxDistance = span * 2.4;
+    controls.maxDistance = span * 3.2;
     controls.update();
   }
   S.buildMs = Math.round(performance.now() - t0);
@@ -1168,7 +1173,7 @@ bSave.onclick = () => {
     { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = map.name + '.json';
+  a.download = map.name.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^[.-]+/, '').slice(0, 80) + '.json';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 };
@@ -1252,7 +1257,7 @@ renderer.setAnimationLoop(() => {
   if (!fly.on) controls.update();
 
   sun.target.position.set(camera.position.x, 0, camera.position.z);
-  sun.position.copy(SUN_DIR).multiplyScalar(S.M.span * 1.4).add(sun.target.position);
+  sun.position.copy(SUN_DIR).multiplyScalar(S.M.frame * 1.6).add(sun.target.position);
 
   renderer.render(scene, camera);
   drawMinimap();
