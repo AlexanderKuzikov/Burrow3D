@@ -112,6 +112,7 @@
     <label class="filebtn" title="Все .json из выбранной папки — обычно той же, где лежит эта страница">Из папки<input type="file" id="dir" webkitdirectory multiple></label>
     <select id="selMap" title="Встроенные карты и карты из папки"></select>
     <select id="selBiome" title="Набор объектов"></select>
+    <button id="bSkin" class="grow" title="Выгрузить набор оформления и текущую карту одним JSON">Выгрузить кожу</button>
     <button id="bSave" class="grow" title="Скачать карту с текущей легендой">Сохранить</button>
   </div>
 
@@ -848,6 +849,19 @@ function tint(spec, rand) {
   return c.offsetHSL(0, 0, (rand[1] - 0.5) * 0.07);
 }
 
+/* Ожидаемое число объектов на клетке — математическое ожидание цикла в
+   buildScatter. Та же величина `per` и та же шумовая маска, но без случайных
+   чисел: для выгрузки плотностей нужна величина, а не бросок. Обе ветви цикла
+   дают в среднем ровно `per`, поэтому формула одна. Если цикл поменяют,
+   это ожидание надо поменять вместе с ним — иначе разъедутся; ловит тест,
+   сравнивающее сумму плотностей с реальным числом объектов на экране. */
+function ruleDensity(spec, cx, cy) {
+  const per = spec.per === undefined ? 1 : spec.per;
+  if (!spec.dens) return per;
+  const d = fbm(cx * spec.dens.freq + 60, cy * spec.dens.freq - 35, 3);
+  return per * clamp((spec.dens.bias || 0) + (spec.dens.gain || 1) * d, 0, 1);
+}
+
 function buildScatter() {
   const group = new T.Group();
   const map = S.map, M = S.M, def = S.ground;
@@ -943,6 +957,138 @@ function buildScatter() {
 }
 
 const dummy = new T.Object3D();
+
+/* ── выгрузка кожи ────────────────────────────────────────────────────────
+   Один файл на текущий набор оформления: всё, что нужно игре, чтобы повторить
+   вид. В контракте нет перечислений — ни наборов, ни объектов, ни «известных»
+   имён, — поэтому каждое правило несёт для рисования всё само.
+
+   Главное здесь — `density`. Игра получает не параметры шума, а готовые числа:
+   сколько объектов ждать в блоке SKIN_CELL × SKIN_CELL клеток. Иначе игре
+   пришлось бы держать вторую реализацию шума, и она разошлась бы с этой на
+   первой же правке набора. Числа — математическое ожидание той же формулы, по
+   которой buildScatter раскладывает объекты сейчас.
+
+   `builder` в файле — только для чтения человеком: по нему игра не ищет ничего.
+
+   Порядок обхода фиксирован, случайных чисел нет, времени нет: две выгрузки
+   подряд дают побайтово один и тот же файл. */
+
+const SKIN_VERSION = 1;
+const SKIN_CELL = 8;
+const SKIN_HEX = ['top', 'bottom', 'sun', 'fog', 'hemiSky', 'hemiGround', 'fill'];
+
+const hexStr = v => (v === undefined || v === null ? '#ffffff'
+  : '#' + (v & 0xffffff).toString(16).padStart(6, '0'));
+
+/* Хэш содержимого карты: по нему игра узнает, что скин выгружен под эту карту,
+   и не применит его к другой. Считаем по строке из размеров и строк, а не по
+   JSON объекта — порядок ключей не должен влиять на результат. */
+function mapHash(map) {
+  const s = map.w + 'x' + map.h + '\n' + map.grid.join('\n');
+  let h = 0x811c9dc5;                                  // FNV-1a, 32 бита
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/* Плотности по блокам, построчно: индекс = (номер блока по Y) * (блоков по X) + X.
+   Частичный последний блок считается по тем клеткам, что в него попали, — без
+   нормировки на полный размер: игре нужно сколько объектов ждать, а не доля. */
+function skinDensity(spec, typeVal) {
+  const map = S.map, gw = Math.ceil(map.w / SKIN_CELL), gh = Math.ceil(map.h / SKIN_CELL);
+  const out = new Float64Array(gw * gh);
+  for (let cy = 0; cy < map.h; cy++) {
+    for (let cx = 0; cx < map.w; cx++) {
+      if (S.type[cy * map.w + cx] !== typeVal) continue;
+      out[Math.floor(cy / SKIN_CELL) * gw + Math.floor(cx / SKIN_CELL)] += ruleDensity(spec, cx, cy);
+    }
+  }
+  return Array.from(out, v => Math.round(v * 100) / 100 + 0);   // +0 убирает -0
+}
+
+function skinRule(biomeId, spec, def, cellType, typeVal, taken) {
+  /* Цвета и свечение — эффективные: правило набора перекрывает цвет части, а
+     при отсутствии перекрытия берётся цвет из BUILDERS. Игра получает то, что
+     действительно нарисовано, и не повторяет разрешение приоритетов. */
+  const colors = {}, glow = {};
+  for (const part of def.parts) {
+    const over = (spec.colors || {})[part.id];
+    const cs = over !== undefined ? over : part.color;
+    const pair = Array.isArray(cs) ? cs : [cs, cs];
+    colors[part.id] = pair.map(hexStr);
+    const gs = (spec.glow || {})[part.id];
+    if (gs) glow[part.id] = [hexStr(gs[0]), gs[1]];
+    else if (part.emissive !== undefined) {
+      glow[part.id] = [hexStr(part.emissive), part.emissiveI === undefined ? 1 : part.emissiveI];
+    }
+  }
+  let id = biomeId + '.' + spec.b;
+  if (taken.has(id)) { let n = 2; while (taken.has(id + '.' + n)) n++; id += '.' + n; }
+  taken.add(id);
+  const sc = spec.scale === undefined ? 1 : spec.scale;
+  return {
+    id,
+    builder: spec.b,
+    cellType,
+    solid: !!def.solid,
+    layer: spec.layer || 'props',
+    scale: Array.isArray(sc) ? sc.slice() : [sc, sc],
+    jitter: spec.jitter === undefined ? 0.9 : spec.jitter,
+    tilt: spec.tilt || 0,
+    colors,
+    glow,
+    geometry: null,                 // выгрузка геометрии — отдельная работа; поле нужно уже сейчас
+    density: skinDensity(spec, typeVal),
+  };
+}
+
+function exportSkin() {
+  const b = BIOMES[S.biome], map = S.map, taken = new Set(), rules = [];
+  const val = { free: FREE, road: ROAD, blocked: BLOCKED };
+  for (const cellType of ['free', 'road', 'blocked']) {
+    for (const spec of (b.scatter || {})[cellType] || []) {
+      const def = BUILDERS[spec.b];
+      if (!def) continue;
+      rules.push(skinRule(S.biome, spec, def, cellType, val[cellType], taken));
+    }
+  }
+  const sky = {};
+  for (const [k, v] of Object.entries(b.sky)) sky[k] = SKIN_HEX.includes(k) ? hexStr(v) : v;
+  let water = null;                        // null — набора без воды, это часть вида
+  if (b.water) {
+    water = {};
+    for (const [k, v] of Object.entries(b.water)) water[k] = k === 'color' ? hexStr(v) : v;
+  }
+  return {
+    version: SKIN_VERSION,
+    name: S.biome,
+    map: { width: map.w, height: map.h, hash: mapHash(map) },
+    ground: {
+      free: b.ground.free.map(hexStr), road: b.ground.road.map(hexStr), blocked: b.ground.blocked.map(hexStr),
+    },
+    /* Рельеф в контракте — три числа, которые игра действительно может применить.
+       Параметры шума рельефа сюда не идут: у игры нет второй реализации fbm. */
+    relief: {
+      blockedLift: b.relief.blockedLift || 0,
+      roadFlatten: b.relief.roadFlatten || 0,
+      roadSink: b.relief.roadSink || 0,
+    },
+    light: { sky, water },
+    scatter: { cell: SKIN_CELL, rules },
+  };
+}
+
+const skinJson = () => JSON.stringify(exportSkin(), null, 1) + '\n';
+const safeName = s => String(s).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^[.-]+/, '').slice(0, 80) || 'map';
+const skinFileName = () => safeName(BIOMES[S.biome].name) + '.json';
+
+function downloadSkin() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([skinJson()], { type: 'application/json' }));
+  a.download = skinFileName();
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
 
 /* ══════════════════════════ 9. вода ══════════════════════════ */
 
@@ -1185,7 +1331,7 @@ const _v2 = new T.Vector3();
 /* ══════════════════════════ 14. интерфейс ══════════════════════════ */
 
 const selMap = $('selMap'), selBiome = $('selBiome'), fileIn = $('file'), dirIn = $('dir');
-const bFree = $('bFree'), bReset = $('bReset'), bSave = $('bSave');
+const bFree = $('bFree'), bReset = $('bReset'), bSave = $('bSave'), bSkin = $('bSkin');
 const bPlants = $('bPlants'), bRocks = $('bRocks'), bProps = $('bProps'), bShadow = $('bShadow');
 const lsel = [...document.querySelectorAll('.lsel')];
 const noteEl = $('note'), note2 = $('note2'), statEl = $('stat'), fpsEl = $('fps');
@@ -1262,10 +1408,11 @@ bSave.onclick = () => {
     { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = map.name.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^[.-]+/, '').slice(0, 80) + '.json';
+  a.download = safeName(map.name) + '.json';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 };
+bSkin.onclick = downloadSkin;
 
 /* ── слои ── */
 function tgl(btn, key) {
@@ -1390,7 +1537,10 @@ function boot() {
 }
 
 window.BURROW = { T, scene, camera, renderer, controls, S, BIOMES, BUILDERS, DEMO,
-                  terrainH, loadMap, rebuild, setBiome: id => { selBiome.value = id; selBiome.onchange(); } };
+                  terrainH, loadMap, rebuild, setBiome: id => { selBiome.value = id; selBiome.onchange(); },
+                  /* выгрузка кожи: экспортёром пользуется и кнопка, и npm run export,
+                     поэтому расходиться им негде */
+                  exportSkin, skinJson, skinFileName, mapHash, SKIN_CELL, SKIN_VERSION };
 
 requestAnimationFrame(() => requestAnimationFrame(boot));
 </script>

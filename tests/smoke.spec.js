@@ -314,6 +314,96 @@ test.describe('Burrow3D', () => {
     expect(errors, 'мусорный .json не должен ломать страницу').toEqual([]);
   });
 
+  test('кожа выгружается детерминированно, читается обратно и совпадает с картинкой', async ({ page }) => {
+    const errors = collectErrors(page);
+    await boot(page, errors);
+
+    /* 96×96 — худший случай по размеру сетки плотностей: 12×12 блоков на
+       правило, и карта не делится на 8 без остатка. */
+    const size = await page.evaluate(() => ({ w: window.BURROW.S.map.w, h: window.BURROW.S.map.h }));
+    expect(size.w).toBe(96);
+    expect(size.h).toBe(96);
+
+    const ids = await page.evaluate(() => Object.keys(window.BURROW.BIOMES));
+    const report = [];
+
+    for (const id of ids) {
+      const frame = await page.evaluate(() => window.BURROW.renderer.info.render.frame);
+      await page.evaluate(b => window.BURROW.setBiome(b), id);
+      await page.waitForFunction(f => window.BURROW.renderer.info.render.frame > f + 3, frame, { timeout: 60_000 });
+
+      const r = await page.evaluate(() => {
+        const B = window.BURROW, S = B.S;
+        const a = B.skinJson();                       // первая выгрузка
+        const b = B.skinJson();                       // вторая, подряд
+        const skin = JSON.parse(a);                   // round-trip: читаем назад
+        const bad = [];
+
+        if (a !== b) bad.push('две выгрузки подряд разошлись');
+        if (skin.version !== B.SKIN_VERSION) bad.push('version');
+        if (skin.name !== S.biome) bad.push('name');
+        if (skin.map.width !== S.map.w || skin.map.height !== S.map.h) bad.push('map.width/height');
+        if (skin.map.hash !== B.mapHash(S.map)) bad.push('map.hash');
+        if (skin.scatter.cell !== 8) bad.push('scatter.cell');
+        const gw = Math.ceil(S.map.w / 8), gh = Math.ceil(S.map.h / 8);
+
+        let sumDensity = 0;
+        const idsSeen = new Set();
+        for (const [i, rule] of skin.scatter.rules.entries()) {
+          const at = 'правило ' + i + ' (' + rule.id + ')';
+          const obj = B.BUILDERS[rule.builder];
+          if (!obj) bad.push(at + ': builder «' + rule.builder + '» нет в BUILDERS');
+          if (obj && rule.solid !== obj.solid) bad.push(at + ': solid не совпадает с BUILDERS');
+          if (rule.solid === true && rule.cellType !== 'blocked') bad.push(at + ': непроходимый на ' + rule.cellType);
+          if (idsSeen.has(rule.id)) bad.push(at + ': id повторяется');
+          idsSeen.add(rule.id);
+          if (rule.geometry !== null) bad.push(at + ': geometry не null');
+          if (rule.density.length !== gw * gh) bad.push(at + ': density длиной ' + rule.density.length);
+          for (const v of rule.density) {
+            if (!(v >= 0)) { bad.push(at + ': плотность вне 0..'); break; }
+            sumDensity += v;
+          }
+        }
+        /* числа, о которых просит приёмка: ожидание из файла и реальность на экране */
+        let placed = 0;
+        B.scene.traverse(o => { if (o.isGroup) placed += o.userData.count || 0; });
+        return { biome: S.biome, bad, sumDensity: Math.round(sumDensity), placed, bytes: a.length };
+      });
+
+      report.push(`${r.biome}: плотности ${r.sumDensity}, на экране ${r.placed} (${r.bytes} Байт)`);
+      expect(r.bad, `${r.biome}: ${r.bad.join('; ')}`).toEqual([]);
+      /* сумма плотностей — ожидание того же самого расчёта, поэтому обязана
+         попадать в фактическое число объектов, а не просто «того же порядка» */
+      expect(r.sumDensity, `${r.biome}: плотности ${r.sumDensity} против ${r.placed} объектов`)
+        .toBeGreaterThan(r.placed * 0.85);
+      expect(r.sumDensity, `${r.biome}: плотности ${r.sumDensity} против ${r.placed} объектов`)
+        .toBeLessThan(r.placed * 1.15);
+    }
+
+    console.log('\n  сумма плотностей против объектов на экране (карта 96×96):');
+    for (const line of report) console.log('    ' + line);
+    expect(report.length).toBe(ids.length);
+    expect(errors).toEqual([]);
+
+    /* кнопка «Выгрузить кожу» — то, чем владелец пользуется на самом деле,
+       поэтому проверяем её целиком: имя файла из имени набора и побайтовое
+       совпадение содержимого с тем, что отдаёт экспортёр */
+    const want = await page.evaluate(() => ({ file: window.BURROW.skinFileName(), text: window.BURROW.skinJson() }));
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30_000 }),
+      page.locator('#bSkin').click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(want.file);
+    const stream = await download.createReadStream();
+    const got = await new Promise((res, rej) => {
+      const chunks = [];
+      stream.on('data', c => chunks.push(c));
+      stream.on('end', () => res(Buffer.concat(chunks).toString('utf8')));
+      stream.on('error', rej);
+    });
+    expect(got).toBe(want.text);
+  });
+
   test('собранный файл самодостаточен: ни одного запроса наружу', async ({ page }) => {
     const dist = path.join(__dirname, '..', 'dist', 'burrow3d.html');
     test.skip(!fs.existsSync(dist), 'нет dist/burrow3d.html — сначала npm run build');
@@ -338,12 +428,14 @@ test.describe('Burrow3D', () => {
         if (o.isInstancedMesh) instanced++;
         if (o.isMesh && o.material.map) terrain = true;
       });
-      return { maps: B.DEMO.length, biomes: Object.keys(B.BIOMES).length, instanced, terrain };
+      return { maps: B.DEMO.length, biomes: Object.keys(B.BIOMES).length, instanced, terrain,
+               skinRules: B.exportSkin().scatter.rules.length };
     });
     expect(info.maps).toBeGreaterThanOrEqual(3);      // карты вложены в файл
     expect(info.biomes).toBeGreaterThanOrEqual(7);    // наборы вложены в файл
     expect(info.terrain).toBe(true);
     expect(info.instanced).toBeGreaterThan(0);
+    expect(info.skinRules, 'выгрузка кожи должна работать и в собранном файле').toBeGreaterThan(0);
     expect(external, 'артефакт ходит в сеть: ' + external.join(', ')).toEqual([]);
     expect(errors).toEqual([]);
   });
