@@ -963,54 +963,90 @@ const dummy = new T.Object3D();
    вид. В контракте нет перечислений — ни наборов, ни объектов, ни «известных»
    имён, — поэтому каждое правило несёт для рисования всё само.
 
-   Главное здесь — `density`. Игра получает не параметры шума, а готовые числа:
-   сколько объектов ждать в блоке SKIN_CELL × SKIN_CELL клеток. Иначе игре
+   Состав `version: 1` целиком. Файл кожи пока не читает никто, поэтому версия
+   не росла, а контракт закрывался; перечислив состав здесь, мы не будем
+   спорить, что было в первой версии, когда появится вторая.
+
+     файл
+       version      1
+       name         свободная строка — идентификатор набора, не перечисление
+       cellSize     мировых единиц в одной клетке карты; см. CELL ниже
+       map          width, height, fingerprint
+       ground       free, road, blocked — по паре цветов #rrggbb на тип клетки
+       relief       blockedLift, roadFlatten, roadSink
+       light        sky (объект), water (объект или null)
+       scatter      cell (сторона блока в клетках) и rules[]
+     правило
+       id           уникально внутри файла
+       builder      имя объекта — ТОЛЬКО для чтения человеком, игра не ищет
+       cellType     free | road | blocked
+       solid        проходимость объекта, совпадает с BUILDERS
+       layer        plants | rocks | props
+       scale        [минимум, максимум]
+       jitter       0..1, насколько объект смещается внутри клетки
+       tilt         максимальный наклон, радианы
+       colors       { часть: [цвет, цвет] } — эффективные, с учётом перекрытий
+       glow         { часть: [цвет, сила] }, пустой объект если свечения нет
+       float        { часть: [высота, высота] }, пустой если никто не парит
+       geometry     null; выгрузка геометрии — отдельная работа
+       count        счётчик по блокам scatter.cell × scatter.cell клеток
+
+   Главное здесь — `count`. Игра получает не параметры шума, а готовые числа:
+   сколько объектов ждать в блоке SKIN_BLOCK × SKIN_BLOCK клеток. Иначе игре
    пришлось бы держать вторую реализацию шума, и она разошлась бы с этой на
    первой же правке набора. Числа — математическое ожидание той же формулы, по
    которой buildScatter раскладывает объекты сейчас.
 
-   `builder` в файле — только для чтения человеком: по нему игра не ищет ничего.
+   `cellSize` и `scatter.cell` — разные вещи, путать их нельзя. `cellSize` это
+   перевод клетки карты в мировые единицы (`CELL`), без него игре неизвестно,
+   во сколько раз её клетка мельче нашей. `scatter.cell` — сторона блока, внутри
+   которого посчитан счётчик, и к единицам мира отношения не имеет.
 
    Порядок обхода фиксирован, случайных чисел нет, времени нет: две выгрузки
    подряд дают побайтово один и тот же файл. */
 
 const SKIN_VERSION = 1;
-const SKIN_CELL = 8;
+const SKIN_BLOCK = 4;                 // сторона блока счётчика, в клетках карты
 const SKIN_HEX = ['top', 'bottom', 'sun', 'fog', 'hemiSky', 'hemiGround', 'fill'];
 
 const hexStr = v => (v === undefined || v === null ? '#ffffff'
   : '#' + (v & 0xffffff).toString(16).padStart(6, '0'));
 
-/* Хэш содержимого карты: по нему игра узнает, что скин выгружен под эту карту,
-   и не применит его к другой. Считаем по строке из размеров и строк, а не по
-   JSON объекта — порядок ключей не должен влиять на результат. */
-function mapHash(map) {
+/* Отпечаток карты: по нему игра узнаёт, что скин выгружен под эту карту, и не
+   применит его к другой. Это FNV-1a на 32 бита — для сверки «этот скин к этой
+   карте» достаточно, но целостности он не гарантирует: для этого есть sha256
+   (contentHash). Поэтому и называется отпечатком, а не хэшем.
+   Считаем по строке из размеров и строк, а не по JSON объекта — порядок ключей
+   не должен влиять на результат. */
+function mapFingerprint(map) {
   const s = map.w + 'x' + map.h + '\n' + map.grid.join('\n');
   let h = 0x811c9dc5;                                  // FNV-1a, 32 бита
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-/* Плотности по блокам, построчно: индекс = (номер блока по Y) * (блоков по X) + X.
+/* Счётчики по блокам, построчно: индекс = (номер блока по Y) * (блоков по X) + X.
    Частичный последний блок считается по тем клеткам, что в него попали, — без
    нормировки на полный размер: игре нужно сколько объектов ждать, а не доля. */
-function skinDensity(spec, typeVal) {
-  const map = S.map, gw = Math.ceil(map.w / SKIN_CELL), gh = Math.ceil(map.h / SKIN_CELL);
+function skinCount(spec, typeVal) {
+  const map = S.map, gw = Math.ceil(map.w / SKIN_BLOCK), gh = Math.ceil(map.h / SKIN_BLOCK);
   const out = new Float64Array(gw * gh);
   for (let cy = 0; cy < map.h; cy++) {
     for (let cx = 0; cx < map.w; cx++) {
       if (S.type[cy * map.w + cx] !== typeVal) continue;
-      out[Math.floor(cy / SKIN_CELL) * gw + Math.floor(cx / SKIN_CELL)] += ruleDensity(spec, cx, cy);
+      out[Math.floor(cy / SKIN_BLOCK) * gw + Math.floor(cx / SKIN_BLOCK)] += ruleDensity(spec, cx, cy);
     }
   }
   return Array.from(out, v => Math.round(v * 100) / 100 + 0);   // +0 убирает -0
 }
 
 function skinRule(biomeId, spec, def, cellType, typeVal, taken) {
-  /* Цвета и свечение — эффективные: правило набора перекрывает цвет части, а
-     при отсутствии перекрытия берётся цвет из BUILDERS. Игра получает то, что
-     действительно нарисовано, и не повторяет разрешение приоритетов. */
-  const colors = {}, glow = {};
+  /* Цвета, свечение и высота парения — эффективные: правило набора перекрывает
+     цвет части, а при отсутствии перекрытия берётся значение из BUILDERS. Игра
+     получает то, что действительно нарисовано, и не повторяет разрешение
+     приоритетов. `float` — высота парения части, у большинства объектов её нет,
+     поэтому поле бывает пустым объектом. */
+  const colors = {}, glow = {}, float = {};
   for (const part of def.parts) {
     const over = (spec.colors || {})[part.id];
     const cs = over !== undefined ? over : part.color;
@@ -1021,6 +1057,7 @@ function skinRule(biomeId, spec, def, cellType, typeVal, taken) {
     else if (part.emissive !== undefined) {
       glow[part.id] = [hexStr(part.emissive), part.emissiveI === undefined ? 1 : part.emissiveI];
     }
+    if (part.float) float[part.id] = [part.float[0], part.float[1]];
   }
   let id = biomeId + '.' + spec.b;
   if (taken.has(id)) { let n = 2; while (taken.has(id + '.' + n)) n++; id += '.' + n; }
@@ -1037,8 +1074,9 @@ function skinRule(biomeId, spec, def, cellType, typeVal, taken) {
     tilt: spec.tilt || 0,
     colors,
     glow,
+    float,
     geometry: null,                 // выгрузка геометрии — отдельная работа; поле нужно уже сейчас
-    density: skinDensity(spec, typeVal),
+    count: skinCount(spec, typeVal),
   };
 }
 
@@ -1062,7 +1100,12 @@ function exportSkin() {
   return {
     version: SKIN_VERSION,
     name: S.biome,
-    map: { width: map.w, height: map.h, hash: mapHash(map) },
+    /* Во сколько раз клетка карты мельче мировой единицы. Игра переводит по
+       нему всё: без него её клетка мельче нашей, ландшафт вышел бы вдвое
+       ниже, а blockedLift: 2.5 превратился бы в 1.25. Величина та самая, по
+       которой buildScatter считает мировые координаты. */
+    cellSize: CELL,
+    map: { width: map.w, height: map.h, fingerprint: mapFingerprint(map) },
     ground: {
       free: b.ground.free.map(hexStr), road: b.ground.road.map(hexStr), blocked: b.ground.blocked.map(hexStr),
     },
@@ -1074,7 +1117,7 @@ function exportSkin() {
       roadSink: b.relief.roadSink || 0,
     },
     light: { sky, water },
-    scatter: { cell: SKIN_CELL, rules },
+    scatter: { cell: SKIN_BLOCK, rules },
   };
 }
 
@@ -1540,7 +1583,7 @@ window.BURROW = { T, scene, camera, renderer, controls, S, BIOMES, BUILDERS, DEM
                   terrainH, loadMap, rebuild, setBiome: id => { selBiome.value = id; selBiome.onchange(); },
                   /* выгрузка кожи: экспортёром пользуется и кнопка, и npm run export,
                      поэтому расходиться им негде */
-                  exportSkin, skinJson, skinFileName, mapHash, SKIN_CELL, SKIN_VERSION };
+                  exportSkin, skinJson, skinFileName, mapFingerprint, CELL, SKIN_BLOCK, SKIN_VERSION };
 
 requestAnimationFrame(() => requestAnimationFrame(boot));
 </script>

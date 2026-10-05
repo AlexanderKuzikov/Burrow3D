@@ -342,12 +342,14 @@ test.describe('Burrow3D', () => {
         if (a !== b) bad.push('две выгрузки подряд разошлись');
         if (skin.version !== B.SKIN_VERSION) bad.push('version');
         if (skin.name !== S.biome) bad.push('name');
+        /* без cellSize игре неизвестен масштаб клетки: её ландшафт вышел бы вдвое ниже */
+        if (skin.cellSize !== B.CELL) bad.push('cellSize ' + skin.cellSize + ' вместо CELL ' + B.CELL);
         if (skin.map.width !== S.map.w || skin.map.height !== S.map.h) bad.push('map.width/height');
-        if (skin.map.hash !== B.mapHash(S.map)) bad.push('map.hash');
-        if (skin.scatter.cell !== 8) bad.push('scatter.cell');
-        const gw = Math.ceil(S.map.w / 8), gh = Math.ceil(S.map.h / 8);
+        if (skin.map.fingerprint !== B.mapFingerprint(S.map)) bad.push('map.fingerprint');
+        if (skin.scatter.cell !== B.SKIN_BLOCK) bad.push('scatter.cell');
+        const gw = Math.ceil(S.map.w / B.SKIN_BLOCK), gh = Math.ceil(S.map.h / B.SKIN_BLOCK);
 
-        let sumDensity = 0;
+        let sumCount = 0;
         const idsSeen = new Set();
         for (const [i, rule] of skin.scatter.rules.entries()) {
           const at = 'правило ' + i + ' (' + rule.id + ')';
@@ -358,29 +360,34 @@ test.describe('Burrow3D', () => {
           if (idsSeen.has(rule.id)) bad.push(at + ': id повторяется');
           idsSeen.add(rule.id);
           if (rule.geometry !== null) bad.push(at + ': geometry не null');
-          if (rule.density.length !== gw * gh) bad.push(at + ': density длиной ' + rule.density.length);
-          for (const v of rule.density) {
-            if (!(v >= 0)) { bad.push(at + ': плотность вне 0..'); break; }
-            sumDensity += v;
+          for (const [pid, pair] of Object.entries(rule.float || {})) {
+            if (!Array.isArray(pair) || pair.length !== 2 || pair.some(v => typeof v !== 'number')) {
+              bad.push(at + ': float.' + pid + ' не пара чисел');
+            }
+          }
+          if (rule.count.length !== gw * gh) bad.push(at + ': count длиной ' + rule.count.length);
+          for (const v of rule.count) {
+            if (!(v >= 0)) { bad.push(at + ': счётчик вне 0..'); break; }
+            sumCount += v;
           }
         }
         /* числа, о которых просит приёмка: ожидание из файла и реальность на экране */
         let placed = 0;
         B.scene.traverse(o => { if (o.isGroup) placed += o.userData.count || 0; });
-        return { biome: S.biome, bad, sumDensity: Math.round(sumDensity), placed, bytes: a.length };
+        return { biome: S.biome, bad, sumCount: Math.round(sumCount), placed, bytes: a.length };
       });
 
-      report.push(`${r.biome}: плотности ${r.sumDensity}, на экране ${r.placed} (${r.bytes} Байт)`);
+      report.push(`${r.biome}: счётчики ${r.sumCount}, на экране ${r.placed} (${r.bytes} Байт)`);
       expect(r.bad, `${r.biome}: ${r.bad.join('; ')}`).toEqual([]);
-      /* сумма плотностей — ожидание того же самого расчёта, поэтому обязана
+      /* сумма счётчиков — ожидание того же самого расчёта, поэтому обязана
          попадать в фактическое число объектов, а не просто «того же порядка» */
-      expect(r.sumDensity, `${r.biome}: плотности ${r.sumDensity} против ${r.placed} объектов`)
+      expect(r.sumCount, `${r.biome}: счётчики ${r.sumCount} против ${r.placed} объектов`)
         .toBeGreaterThan(r.placed * 0.85);
-      expect(r.sumDensity, `${r.biome}: плотности ${r.sumDensity} против ${r.placed} объектов`)
+      expect(r.sumCount, `${r.biome}: счётчики ${r.sumCount} против ${r.placed} объектов`)
         .toBeLessThan(r.placed * 1.15);
     }
 
-    console.log('\n  сумма плотностей против объектов на экране (карта 96×96):');
+    console.log('\n  сумма счётчиков против объектов на экране (карта 96×96):');
     for (const line of report) console.log('    ' + line);
     expect(report.length).toBe(ids.length);
     expect(errors).toEqual([]);

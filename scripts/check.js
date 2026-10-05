@@ -7,11 +7,12 @@
                     границы тумана в порядке возрастания, обрыв в границах [0;1]
    3. biomes ↔ BUILDERS — каждый упомянутый объект существует, каждый ключ в colors{}
                     и glow{} совпадает с id части этого объекта, каждый layer известен
-   4. dist/skins — ВЫГРУЖЕННЫЕ скины: у каждого набора есть файл, у каждого правила
-                    builder известен, solid совпадает с BUILDERS и не встречается у
-                    свободной клетки и дороги, плотности в 0.., размер сетки плотностей
-                    равен ceil(w/cell) × ceil(h/cell), map.hash совпадает с картой,
-                    а состав правил совпадает с biomes.js — иначе кожа устарела
+   4. dist/skins — ВЫГРУЖЕННЫЕ скины: у каждого набора есть файл, cellSize совпадает с CELL
+                    движка, у каждого правила builder известен, solid совпадает с ним,
+                    solid: true не встречается у свободной клетки и дороги, count в 0..,
+                    размер сетки счётчиков равен ceil(w/block) × ceil(h/block), float — пары
+                    чисел, map.fingerprint совпадает с картой, а состав правил совпадает
+                    с biomes.js — иначе кожа устарела
 
    Именно эти четыре класса ошибок проскакивали при написании набора вручную.
    Пункт 4 требует `npm run export`: чек читает выгруженное, а не генерирует его.
@@ -62,20 +63,20 @@ const isHex = v => typeof v === 'number' || HEX.test(v);
 const isHexPair = v => Array.isArray(v) && v.length === 2 && v.every(isHex);
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
-/* Хэш карты нужен чеку, чтобы сверить `map.hash`. Функция живёт в движке — там
-   же `fbm` и экспортёр, — но сама чистая и маленькая, поэтому вытаскиваем её
-   текстом, ровно как уже вытаскиваем BUILDERS. */
-function parseMapHash() {
+/* Из движка вытаскиваем то, чем чек сверяет выгрузку: саму клетку карты в
+   мировых единицах и отпечаток карты. Обе величины живут в index.html — там же
+   экспортёр, — но сами чистые и маленькие, поэтому берём их текстом, ровно как
+   уже вытаскиваем BUILDERS. Значение CELL — эталон для `cellSize`: если оно
+   разойдётся с тем, чем реально считается расстановка, чек обязан упасть. */
+function fromEngine(re, what, ctx) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  const found = html.match(/function mapHash\(map\) \{[\s\S]*?\n\}/g) || [];
+  const found = html.match(re) || [];
   if (found.length !== 1) {
-    fail(`index.html: функция mapHash найдена ${found.length} раз — сверить map.hash нечем`);
-    return () => '';
+    fail(`index.html: ${what} найден ${found.length} раз — сверять выгрузку нечем`);
+    return null;
   }
-  const ctx = {};
-  vm.createContext(ctx);
-  vm.runInContext(found[0] + '\nglobalThis.__mapHash = mapHash;', ctx, { filename: 'index.html#mapHash' });
-  return ctx.__mapHash;
+  vm.runInContext(found[0] + `\nglobalThis.__v = ${what};`, ctx, { filename: `index.html#${what}` });
+  return ctx.__v;
 }
 
 /* ── 1. карты ── */
@@ -186,11 +187,14 @@ for (const [id, b] of Object.entries(BIOMES)) {
 /* ── 4. выгруженные скины ───────────────────────────────────────────────────
    Контракт не содержит перечислений, поэтому проверять тут нечем «сверху»:
    берём каждый файл и спрашиваем его по правилам самого контракта. */
-const mapHash = parseMapHash();
+const engineCtx = {};
+vm.createContext(engineCtx);
+const CELL = fromEngine(/const CELL = \d+;/, 'CELL', engineCtx);
+const fingerprintOf = fromEngine(/function mapFingerprint\(map\) \{[\s\S]*?\n\}/, 'mapFingerprint', engineCtx);
 const SKINS = path.join(ROOT, 'dist', 'skins');
 const HEXP = /^#[0-9a-f]{6}$/;
 const CELL_TYPES = ['free', 'road', 'blocked'];
-const SKIN_CELL = 8;
+const SKIN_BLOCK = 4;                 // сторона блока счётчика, в клетках карты
 const SKIN_LAYERS = new Set(['plants', 'rocks', 'props']);
 
 function checkSkin(skin, where) {
@@ -200,13 +204,24 @@ function checkSkin(skin, where) {
   if (typeof skin.name !== 'string' || !skin.name) fail(`${where}: name — непустая строка`);
   else if (!BIOMES[skin.name]) fail(`${where}: набор «${skin.name}» не существует в biomes.js`);
 
-  /* карта: хэш должен совпадать с реальной картой такого размера */
+  /* Клетка карты в мировых единицах. Без неё игра не знает, во сколько раз её
+     клетка мельче нашей, и нарисует ландшафт вдвое ниже, а blockedLift — вдвое
+     меньше. Значение обязано совпадать с CELL из движка, а не просто быть
+     каким-то числом. */
+  if (skin.cellSize === undefined) fail(`${where}: нет cellSize — без него игре неизвестен масштаб клетки`);
+  else if (skin.cellSize !== CELL) fail(`${where}: cellSize ${JSON.stringify(skin.cellSize)}, а расстановка считается в CELL = ${CELL}`);
+
+  /* Отпечаток карты: должен совпадать с реальной картой такого размера.
+     Это FNV-1a на 32 бита — сверка «этот скин к этой карте», а НЕ проверка
+     целостности: для целостности есть sha256 (contentHash). Путать их нельзя,
+     поэтому здесь поле называется fingerprint, а не hash. */
   const m = skin.map || {};
   if (!Number.isInteger(m.width) || !Number.isInteger(m.height)) fail(`${where}: map.width/height — целые числа`);
   const src = DEMO.find(x => x.width === m.width && x.height === m.height);
-  if (!src) fail(`${where}: в maps.js нет карты ${m.width}×${m.height} — сверять hash не с чем`);
-  else if (mapHash({ w: src.width, h: src.height, grid: src.grid }) !== m.hash) {
-    fail(`${where}: map.hash не совпадает с картой «${src.name}»`);
+  if (!src) fail(`${where}: в maps.js нет карты ${m.width}×${m.height} — сверять отпечаток не с чем`);
+  else if (typeof m.fingerprint !== 'string' || !m.fingerprint) fail(`${where}: нет map.fingerprint`);
+  else if (fingerprintOf && fingerprintOf({ w: src.width, h: src.height, grid: src.grid }) !== m.fingerprint) {
+    fail(`${where}: map.fingerprint не совпадает с картой «${src.name}»`);
   }
 
   for (const t of CELL_TYPES) {
@@ -222,7 +237,7 @@ function checkSkin(skin, where) {
   else if (!skin.light.sky || typeof skin.light.sky !== 'object') fail(`${where}: light.sky — объект`);
 
   const sc = skin.scatter || {};
-  if (sc.cell !== SKIN_CELL) fail(`${where}: scatter.cell — ${SKIN_CELL}, а не ${JSON.stringify(sc.cell)}`);
+  if (sc.cell !== SKIN_BLOCK) fail(`${where}: scatter.cell — ${SKIN_BLOCK}, а не ${JSON.stringify(sc.cell)}`);
   if (!Array.isArray(sc.rules) || !sc.rules.length) { fail(`${where}: scatter.rules — непустой массив`); return; }
 
   /* кожа устарела, если набор в biomes.js изменился после выгрузки */
@@ -234,7 +249,7 @@ function checkSkin(skin, where) {
     }
   }
 
-  const want = Math.ceil(m.width / SKIN_CELL) * Math.ceil(m.height / SKIN_CELL);
+  const want = Math.ceil(m.width / SKIN_BLOCK) * Math.ceil(m.height / SKIN_BLOCK);
   const ids = new Set();
   for (const [i, r] of sc.rules.entries()) {
     const at = `${where} → правило ${i}`;
@@ -270,12 +285,23 @@ function checkSkin(skin, where) {
       }
     }
     if (r.glow === undefined || r.glow === null || typeof r.glow !== 'object') fail(`${at}: glow — объект (пустой, если свечения нет)`);
+    /* высота парения части; у большинства объектов её нет, поэтому поле бывает
+       пустым объектом, но не массивом и не строкой */
+    if (r.float === undefined || r.float === null || typeof r.float !== 'object' || Array.isArray(r.float)) {
+      fail(`${at}: float — объект (пустой, если никто не парит)`);
+    } else {
+      for (const [pid, pair] of Object.entries(r.float)) {
+        if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(n => isNum(n))) {
+          fail(`${at}: float.${pid} — пара чисел [высота, высота]`);
+        }
+      }
+    }
     if (r.geometry !== null) fail(`${at}: geometry должен быть null — выгрузка геометрии отдельная работа`);
-    if (!Array.isArray(r.density)) fail(`${at}: density — массив чисел`);
+    if (!Array.isArray(r.count)) fail(`${at}: count — массив чисел`);
     else {
-      if (r.density.length !== want) fail(`${at}: в density ${r.density.length} значений, ожидалось ${want}`);
-      const bad = r.density.filter(v => !isNum(v) || v < 0);
-      if (bad.length) fail(`${at}: в density ${bad.length} значений вне 0..`);
+      if (r.count.length !== want) fail(`${at}: в count ${r.count.length} значений, ожидалось ${want}`);
+      const bad = r.count.filter(v => !isNum(v) || v < 0);
+      if (bad.length) fail(`${at}: в count ${bad.length} значений вне 0..`);
     }
   }
 }

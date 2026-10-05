@@ -1,6 +1,6 @@
 {
   "name": "burrow3d",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "ASCII-карта → объёмная местность на Three.js. Сборки нет, зависимости только для тестов.",
   "scripts": {
