@@ -6,3 +6,4 @@ blob-report/
 *.log
 dist/
 scripts/vendor/
+props/

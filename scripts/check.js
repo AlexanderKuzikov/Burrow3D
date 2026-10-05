@@ -1,27 +1,36 @@
 /* Проверка целостности данных Burrow3D. Без зависимостей: node scripts/check.js
----------------------------------------------------------------------------
+   ---------------------------------------------------------------------------
    Проверяет то, что нельзя увидеть глазами, пока сцена не упадёт в браузере:
 
    1. maps.js    — у каждой демо-карты ровные строки, размеры совпадают, лимит 512
    2. biomes.js  — у каждого набора есть обязательные поля, корректные пары цветов,
-                    границы тумана в порядке возрастания, обрыв в границах [0;1]
+                     границы тумана в порядке возрастания, обрыв в границах [0;1]
    3. biomes ↔ BUILDERS — каждый упомянутый объект существует, каждый ключ в colors{}
-                    и glow{} совпадает с id части этого объекта, каждый layer известен
-   4. dist/skins — ВЫГРУЖЕННЫЕ скины: у каждого набора есть файл, cellSize совпадает с CELL
-                    движка, у каждого правила builder известен, solid совпадает с ним,
-                    solid: true не встречается у свободной клетки и дороги, count в 0..,
-                    размер сетки счётчиков равен ceil(w/block) × ceil(h/block), float — пары
-                    чисел, map.fingerprint совпадает с картой, а состав правил совпадает
-                    с biomes.js — иначе кожа устарела
+                     и glow{} совпадает с id части этого объекта, каждый layer известен
+   4. props/    — пропсы из NexusModeler: сорок слотов на месте, номер в имени
+                     совпадает с land.slot, kind из списка, footprint 1 или 2,
+                     solid совпадает с видом (bush и bone проходимы, остальные нет),
+                     имя набора совпадает с ключом в biomes.js, у каждой записи есть
+                     файл на диске и его sha256 совпадает с contentHash
+   5. dist/skins — ВЫГРУЖЕННЫЕ скины: у каждого набора с пропсами есть файл,
+                     cellSize совпадает с CELL движка, tiles совпадают с манифестом
+                     пропсов, у каждого правила builder известен, solid совпадает с
+                     ним, solid: true не встречается у свободной клетки и дороги,
+                     count в 0.., размер сетки счётчиков равен ceil(w/block) ×
+                     ceil(h/block), float — пары чисел, map.fingerprint совпадает
+                     с картой, а состав правил совпадает с biomes.js — иначе кожа
+                     устарела
 
-   Именно эти четыре класса ошибок проскакивали при написании набора вручную.
-   Пункт 4 требует `npm run export`: чек читает выгруженное, а не генерирует его.
+   Именно эти классы ошибок проскакивали при написании набора вручную.
+   Пункты 4 и 5 требуют `npm run props` и `npm run export`: чек читает выгруженное
+   и скачанное, а не генерирует их.
    ------------------------------------------------------------------------- */
 
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '..');
 const errors = [];
@@ -184,19 +193,122 @@ for (const [id, b] of Object.entries(BIOMES)) {
   if (n === 0) fail(`набор «${id}»: ни одного правила расстановки`);
 }
 
-/* ── 4. выгруженные скины ───────────────────────────────────────────────────
-   Контракт не содержит перечислений, поэтому проверять тут нечем «сверху»:
-   берём каждый файл и спрашиваем его по правилам самого контракта. */
+/* ── 4. пропсы ───────────────────────────────────────────────────────────────
+   Геометрия принадлежит NexusModeler, и здесь мы её только читаем: `npm run props`
+   копирует манифест побайтово и сверяет каждый файл по sha256. Чек проверяет
+   копию — полноту набора, вид слота и то, что имя набора в манифесте совпадает
+   с ключом в biomes.js. Именно сюда переехала проверка полноты из контракта
+   производителя: читать её должна игра, а производить геометрию — он. */
 const engineCtx = {};
 vm.createContext(engineCtx);
 const CELL = fromEngine(/const CELL = \d+;/, 'CELL', engineCtx);
 const fingerprintOf = fromEngine(/function mapFingerprint\(map\) \{[\s\S]*?\n\}/, 'mapFingerprint', engineCtx);
+/* Реестр слотов берём из движка, а не пишем второй раз: разойтись могут, и
+   тогда чек проверял бы по одним числам, а движок рисовал бы по другим. */
+const TILE_SLOTS = fromEngine(/const TILE_SLOTS = \d+;/, 'TILE_SLOTS', engineCtx);
+const TILE_KINDS = fromEngine(/const TILE_KINDS = new Set\(\[[^\]]*\]\);/, 'TILE_KINDS', engineCtx);
+const TILE_SOLID = fromEngine(/const TILE_SOLID = new Set\(\[[^\]]*\]\);/, 'TILE_SOLID', engineCtx);
+
+const PROPS_DIR = path.join(ROOT, 'props');
+const PROPS_MANIFEST = path.join(PROPS_DIR, 'manifest.json');
 const SKINS = path.join(ROOT, 'dist', 'skins');
+const propsSets = new Map();          // имя набора → Map(slot → плитка)
 const HEXP = /^#[0-9a-f]{6}$/;
 const CELL_TYPES = ['free', 'road', 'blocked'];
 const SKIN_BLOCK = 4;                 // сторона блока счётчика, в клетках карты
 const SKIN_LAYERS = new Set(['plants', 'rocks', 'props']);
 
+if (!fs.existsSync(PROPS_MANIFEST)) {
+  fail('props/manifest.json нет — выполни `npm run props`. Без пропсов «Лес-Поле» рисует одно, ' +
+       'а игра получит другое, и расхождение вернётся');
+} else {
+  let pm = null;
+  try { pm = JSON.parse(fs.readFileSync(PROPS_MANIFEST, 'utf8')); }
+  catch (e) { fail('props/manifest.json не читается как JSON — ' + e.message); }
+  if (pm) {
+    if (pm.version !== 1) fail(`props/manifest.json: version ${JSON.stringify(pm.version)} — ждём 1`);
+    if (!Array.isArray(pm.models) || !pm.models.length) fail('props/manifest.json: нет models');
+
+    for (const m of pm.models || []) {
+      const id = String(m.id || '');
+      const hit = /^land\.([^.]+)\.(\d+)$/.exec(id);
+      if (!hit) { fail(`пропс «${id}»: имя вне вида land.<набор>.<NN>`); continue; }
+      const set = hit[1], where = `пропс ${id}`;
+      if (!m.land) { fail(`${where}: нет блока land — у рельефной модели он обязателен`); continue; }
+      const slot = m.land.slot;
+      if (!Number.isInteger(slot) || slot < 1 || slot > TILE_SLOTS) {
+        fail(`${where}: слот ${JSON.stringify(slot)} вне 1…${TILE_SLOTS}`);
+        continue;
+      }
+      /* Номер в имени двузначный («land.forest.07»), а в land.slot — число,
+         поэтому сверка числовая, иначе чек ловил бы собственное форматирование. */
+      if (+hit[2] !== slot) {
+        fail(`${where}: в имени номер ${hit[2]}, а в land.slot ${slot} — обязаны совпадать`);
+      }
+      if (!TILE_KINDS || !TILE_KINDS.has(m.land.kind)) {
+        fail(`${where}: kind «${m.land.kind}» не из списка` +
+             (TILE_KINDS ? ` (${[...TILE_KINDS].join(', ')})` : ' — реестр слотов не вытащен из движка'));
+      }
+      if (m.land.footprint !== 1 && m.land.footprint !== 2) {
+        fail(`${where}: footprint ${JSON.stringify(m.land.footprint)} — 1 или 2 клетки`);
+      }
+      /* Проходимость — следствие вида, а не украшение: через bush и bone проходят,
+         остальные останавливают. */
+      if (typeof m.land.solid !== 'boolean') fail(`${where}: solid — true или false`);
+      else if (m.land.solid && TILE_SOLID && !TILE_SOLID.has(m.land.kind)) {
+        fail(`${where}: solid: true у «${m.land.kind}», а через него проходят — ` +
+             `проходимы только ${[...TILE_KINDS].filter(k => !TILE_SOLID.has(k)).join(', ')}`);
+      } else if (!m.land.solid && TILE_SOLID && TILE_SOLID.has(m.land.kind)) {
+        fail(`${where}: solid: false у «${m.land.kind}», а он должен останавливать`);
+      }
+      if (typeof m.file !== 'string' || !/^[\w.-]+\.glb$/i.test(m.file)) {
+        fail(`${where}: непристойное имя файла ${JSON.stringify(m.file)}`);
+        continue;
+      }
+      const file = path.join(PROPS_DIR, m.file);
+      if (!fs.existsSync(file)) {
+        fail(`${where}: файла нет на диске — props/${m.file}. Выполни npm run props`);
+        continue;
+      }
+      const buf = fs.readFileSync(file);
+      if (m.bytes !== undefined && m.bytes !== buf.length) {
+        fail(`${where}: bytes ${m.bytes}, а props/${m.file} весит ${buf.length}`);
+      }
+      const got = 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
+      if (m.contentHash !== got) {
+        fail(`${where}: contentHash разошёлся с файлом — в манифесте ${m.contentHash}, ` +
+             `у props/${m.file} ${got}`);
+      }
+      if (!propsSets.has(set)) propsSets.set(set, new Map());
+      const tiles = propsSets.get(set);
+      if (tiles.has(slot)) fail(`${where}: слот ${slot} в наборе «${set}» повторяется`);
+      tiles.set(slot, { kind: m.land.kind, footprint: m.land.footprint, solid: m.land.solid,
+                        file: m.file, contentHash: m.contentHash });
+    }
+
+    for (const [set, tiles] of propsSets) {
+      const missing = [];
+      for (let s = 1; s <= TILE_SLOTS; s++) if (!tiles.has(s)) missing.push(s);
+      if (missing.length) {
+        fail(`набор пропсов «${set}»: не хватает ${missing.length === 1 ? 'слота' : 'слотов'} — ` +
+             `нет ${missing.join(', ')} (${TILE_SLOTS - missing.length} из ${TILE_SLOTS})`);
+      }
+      /* Имя набора принадлежит NexusModeler, и ключ в biomes.js обязан быть тем же
+         самым. Своего имени здесь не выдумывают: переименование биома должно
+         ломать чек, а не молча оставлять набор без геометрии. */
+      if (!BIOMES[set]) {
+        fail(`набор пропсов «${set}» не совпадает ни с одним набором в biomes.js ` +
+             `(есть: ${biomeIds.join(', ')}) — имена наборов принадлежат NexusModeler`);
+      }
+    }
+  }
+}
+/* Наборы, которые можно выгружать и показывать: пропсы есть и все сорок слотов. */
+const completeSets = new Set([...propsSets].filter(([, t]) => t.size === TILE_SLOTS).map(([s]) => s));
+
+/* ── 5. выгруженные скины ───────────────────────────────────────────────────
+   Контракт не содержит перечислений, поэтому проверять тут нечем «сверху»:
+   берём каждый файл и спрашиваем его по правилам самого контракта. */
 function checkSkin(skin, where) {
   if (!skin || typeof skin !== 'object') { fail(`${where}: не объект JSON`); return; }
 
@@ -235,6 +347,42 @@ function checkSkin(skin, where) {
   }
   if (!skin.light || typeof skin.light !== 'object') fail(`${where}: light — объект с полями sky и water`);
   else if (!skin.light.sky || typeof skin.light.sky !== 'object') fail(`${where}: light.sky — объект`);
+
+  /* Плитки набора. Это ровно то, что раньше жило текстом контракта в
+     NexusModeler: игре нужен номер слота, вид, проходимость и файл модели.
+     Сверяем не только форму, но и совпадение с манифестом пропсов — иначе файл
+     ссылался бы на модели, которых у набора нет. */
+  const manifestSet = propsSets.get(skin.name);
+  if (!Array.isArray(skin.tiles)) {
+    fail(`${where}: нет tiles — без плиток игре нечем рисовать занятые клетки`);
+  } else if (!manifestSet) {
+    fail(`${where}: в tiles ${skin.tiles.length} плиток, а набор «${skin.name}» в манифесте пропсов отсутствует`);
+  } else if (skin.tiles.length !== TILE_SLOTS) {
+    fail(`${where}: в tiles ${skin.tiles.length} плиток из ${TILE_SLOTS}`);
+  } else {
+    const slots = new Set();
+    for (const t of skin.tiles) {
+      const at = `${where} → плитка ${JSON.stringify(t.slot)}`;
+      if (!Number.isInteger(t.slot) || t.slot < 1 || t.slot > TILE_SLOTS) fail(`${at}: номер вне 1…${TILE_SLOTS}`);
+      else if (slots.has(t.slot)) fail(`${at}: номер повторяется`);
+      else slots.add(t.slot);
+      if (!TILE_KINDS || !TILE_KINDS.has(t.kind)) fail(`${at}: kind «${t.kind}» не из списка`);
+      if (t.footprint !== 1 && t.footprint !== 2) fail(`${at}: footprint ${JSON.stringify(t.footprint)} — 1 или 2`);
+      if (typeof t.solid !== 'boolean') fail(`${at}: solid — true или false`);
+      if (typeof t.file !== 'string' || !t.file) fail(`${at}: нет ссылки на файл модели`);
+      if (typeof t.contentHash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(t.contentHash)) {
+        fail(`${at}: contentHash ${JSON.stringify(t.contentHash)} — «sha256:» и 64 шестнадцатеричные`);
+      }
+      const src = manifestSet.get(t.slot);
+      if (!src) continue;                       // номер вне диапазона — сказано выше
+      if (src.file !== t.file) fail(`${at}: файл «${t.file}», а в манифесте «${src.file}»`);
+      if (src.contentHash !== t.contentHash) fail(`${at}: contentHash разошёлся с манифестом`);
+      if (src.kind !== t.kind || src.footprint !== t.footprint || src.solid !== t.solid) {
+        fail(`${at}: в манифесте ${src.kind}/${src.footprint}/${src.solid}, ` +
+             `в файле ${t.kind}/${t.footprint}/${t.solid}`);
+      }
+    }
+  }
 
   const sc = skin.scatter || {};
   if (sc.cell !== SKIN_BLOCK) fail(`${where}: scatter.cell — ${SKIN_BLOCK}, а не ${JSON.stringify(sc.cell)}`);
@@ -306,8 +454,9 @@ function checkSkin(skin, where) {
   }
 }
 
-/* Все наборы обязаны быть выгружены: иначе чек прошёл бы на пустом месте,
-   проверив один-два файла вместо семи. */
+/* Набор с пропсами обязан быть выгружен, а набор без пропсов — не должен:
+   такой файл остался бы от прошлой выгрузки и ушёл бы в игру без tiles.
+   Все наборы проверять нельзя — семь из семи выгружаться больше не будут. */
 let skinCount = 0;
 if (!fs.existsSync(SKINS)) {
   fail('dist/skins/ нет — выполни `npm run export`, чек проверяет выгруженное, а не исходники');
@@ -325,7 +474,15 @@ if (!fs.existsSync(SKINS)) {
     }
     checkSkin(skin, where);
   }
-  for (const id of biomeIds) if (!seen.has(id)) fail(`скин для набора «${id}» не выгружен — выполни npm run export`);
+  for (const id of biomeIds) {
+    if (completeSets.has(id) && !seen.has(id)) {
+      fail(`скин для набора «${id}» не выгружен, хотя пропсы есть — выполни npm run export`);
+    }
+    if (!completeSets.has(id) && seen.has(id)) {
+      fail(`скин набора «${id}» лежит в dist/skins, а пропсов у набора нет — ` +
+           `выполни npm run export заново: в файле без tiles игре нечего рисовать занятые клетки`);
+    }
+  }
   skinCount = files.length;
 }
 
@@ -338,5 +495,6 @@ if (errors.length) {
   process.exit(1);
 }
 console.log(`ok: карт ${nmaps}, наборов ${biomeIds.length}, объектов ${nbuilders}, ` +
-            `правил ${rules}, скинов ${skinCount}` +
+            `правил ${rules}, наборов пропсов ${propsSets.size} ` +
+            `(полных ${completeSets.size}), скинов ${skinCount}` +
             (warnings.length ? `, предупреждений ${warnings.length}` : ''));

@@ -89,6 +89,16 @@
     text-align:center;font-size:15px}
   #drop small{display:block;color:var(--dim);font-size:12px;margin-top:6px}
 
+  /* Отказ набора: показываем причину, а не сцену с другими объектами. Панель под
+     этим слоем остаётся живой (z-index 5 > 4), иначе переключить набор было бы
+     нечем. */
+  #refuse{position:fixed;inset:0;z-index:4;display:none;align-items:center;justify-content:center;
+    padding:24px;pointer-events:none;background:rgba(7,10,13,.62)}
+  #refuse.on{display:flex}
+  #refuse .glass{padding:20px 24px;max-width:660px;text-align:left}
+  #refuse h2{margin:0 0 8px;font-size:13px;letter-spacing:.4px;color:#ffb3a4}
+  #refuse p{margin:0;color:var(--txt);font-size:13px;line-height:1.6}
+
   #loader{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:16px;background:#070a0d;transition:opacity .5s}
   #loader.gone{opacity:0;pointer-events:none}
@@ -163,6 +173,8 @@
 
 <div id="drop"><div>Отпустите карту здесь<small>JSON: {name, width, height, grid:[строки]}</small></div></div>
 
+<div id="refuse"><div class="glass"><h2 id="refuseTitle">Набор не показан</h2><p id="refuseMsg"></p></div></div>
+
 <div id="loader">
   <div class="spin"></div>
   <p id="lmsg">Генерация местности…</p>
@@ -194,6 +206,7 @@ setTimeout(function () {
 import * as T from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const DEMO = window.DEMO_MAPS || [];
 const BIOMES = window.BIOMES || {};
@@ -452,6 +465,233 @@ const BUILDERS = {
     ],
   },
 };
+
+/* ── 2.1. пропсы: геометрия из NexusModeler ───────────────────────────────────
+   Модели делает не этот проект: `NexusModeler` отдаёт набор по сорок нумерованных
+   слотов (`props/manifest.json` — побайтовая копия его `export/land/manifest.json`,
+   плюс сами GLB). Здесь мы их только читаем, и по контракту самым простым
+   GLTFLoader: без расширений, своих нод и нестандартных атрибутов.
+
+   Откат на процедурные объекты из BUILDERS на занятых клетках здесь недопустим:
+   он и есть то расхождение между картой в предпросмотре и картой в игре, ради
+   которого редактор карты и выгрузка моделей вынесены в отдельные проекты. Если
+   набора нет в манифесте — не показываем набор вовсе и говорим почему. */
+
+const TILE_SLOTS = 40;                     // столько слотов обещает контракт
+const TILE_KINDS = new Set(['tree', 'bush', 'rock', 'debris', 'ruin', 'bone']);
+/* Через bush и bone проходят, остальные останавливают — ровно как в контракте.
+   Проверяет это npm run check, а не зрительное впечатление. */
+const TILE_SOLID = new Set(['tree', 'rock', 'debris', 'ruin']);
+const TILE_LAYER = { tree: 'plants', bush: 'plants', rock: 'rocks',
+                     debris: 'rocks', ruin: 'props', bone: 'props' };
+/* Слой — только чтобы переключатели «Растительность / Камни / Декор» продолжали
+   что-то значить: в контракте слота нет, это наш выбор представления. */
+const TILE_DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+
+const PROPS = {
+  state: 'loading',        // loading | ready | absent | unreadable | broken
+  reason: '',              // причина, по которой набор показать нельзя
+  manifest: null,
+  sets: {},                // имя набора → Map(slot → плитка)
+};
+
+/* Собранный файл (npm run build) вкладывает пропсы как data:-URL — на file:// их
+   иначе не прочитать, а артефакт должен открываться двойным кликом. */
+const propsFileUrl = file =>
+  (window.BURROW_PROPS && window.BURROW_PROPS.files[file]) || ('props/' + file);
+
+function parsePropManifest(text) {
+  let m;
+  try { m = JSON.parse(text); }
+  catch (e) {
+    PROPS.state = 'broken';
+    PROPS.reason = 'манифест пропсов не читается как JSON: ' + e.message;
+    return false;
+  }
+  PROPS.manifest = m;
+  for (const entry of m.models || []) {
+    const hit = /^land\.([^.]+)\.(\d+)$/.exec(String(entry.id || ''));
+    if (!hit || !entry.land) continue;        // запись не рельефная — не наша забота
+    const tile = {
+      slot: entry.land.slot, kind: entry.land.kind,
+      footprint: entry.land.footprint, solid: entry.land.solid,
+      file: entry.file, contentHash: entry.contentHash, triangles: entry.triangles,
+      url: propsFileUrl(entry.file),
+    };
+    if (!PROPS.sets[hit[1]]) PROPS.sets[hit[1]] = new Map();
+    PROPS.sets[hit[1]].set(tile.slot, tile);
+  }
+  return true;
+}
+
+async function loadProps(step) {
+  const inline = window.BURROW_PROPS;
+  let text = null;
+  if (inline) {
+    text = inline.manifest;
+  } else {
+    try {
+      const r = await fetch('props/manifest.json', { cache: 'no-store' });
+      if (!r.ok) {
+        PROPS.state = r.status === 404 ? 'absent' : 'unreadable';
+        PROPS.reason = r.status === 404
+          ? 'пропсов в проекте нет — выполни `npm run props`'
+          : 'сервер ответил на props/manifest.json кодом ' + r.status;
+        return;
+      }
+      text = await r.text();
+    } catch (e) {
+      /* На file:// это не поломка наша, а ограничение платформы: браузер не умеет
+         читать файлы как данные. Поэтому причина называет, что делать, а не
+         молчит и не рисует вместо пропсов процедурные объекты. */
+      PROPS.state = 'unreadable';
+      PROPS.reason = 'браузер не дал прочитать props/manifest.json (' + e.message +
+        ') — на file:// чтение файлов заблокировано; открой страницу по HTTP (`npm run serve`)';
+      return;
+    }
+  }
+  if (!parsePropManifest(text)) return;
+
+  const list = [];
+  for (const tiles of Object.values(PROPS.sets)) for (const t of tiles.values()) list.push(t);
+  const loader = new GLTFLoader();
+  let done = 0;
+  await Promise.all(list.map(async t => {
+    try { t.gltf = await loader.loadAsync(t.url); }
+    catch (e) { t.error = e.message; }
+    done++; if (step) step(done, list.length);
+  }));
+  const broken = list.filter(t => t.error);
+  if (broken.length) {
+    PROPS.state = 'broken';
+    PROPS.reason = 'не загрузилось файлов пропсов: ' + broken.length + ' из ' + list.length +
+      ', первый — ' + broken[0].file + ' (' + broken[0].error + ')';
+  } else {
+    PROPS.state = 'ready';
+  }
+}
+
+/* Одна причина на оба места: надпись в предпросмотре и отказ выгрузки должны
+   говорить одно и то же, иначе придётся гадать, какое из двух объяснений верно. */
+function propsRefusal(biomeId) {
+  const b = BIOMES[biomeId] || {};
+  const label = '«' + (b.name || biomeId) + '» (' + biomeId + ')';
+  const tail = '; кожу такого набора выгружать нельзя и показывать его нельзя: ' +
+    'игре нечем рисовать занятые клетки, а откат на процедурные объекты вернул бы то ' +
+    'самое расхождение между картой и игрой';
+  if (PROPS.state === 'loading') return 'набор ' + label + ': пропсы ещё грузятся';
+  if (PROPS.state !== 'ready') return 'набор ' + label + ': ' + PROPS.reason + tail;
+  const tiles = PROPS.sets[biomeId];
+  if (!tiles) {
+    return 'набор ' + label + ': в манифесте пропсов нет набора «' + biomeId +
+      '» — не хватает ' + TILE_SLOTS + ' слотов из ' + TILE_SLOTS + tail;
+  }
+  const missing = [];
+  for (let s = 1; s <= TILE_SLOTS; s++) if (!tiles.has(s)) missing.push(s);
+  if (missing.length) {
+    return 'набор ' + label + ': не хватает ' + missing.length +
+      (missing.length === 1 ? ' слота' : ' слотов') + ' из ' + TILE_SLOTS +
+      ' — нет ' + missing.join(', ') + tail;
+  }
+  return '';
+}
+
+/* Пропсы на занятые клетки. Плотности по слотам в контракте нет, и выдумывать её
+   здесь нельзя: предпросмотр обязан совпадать с игрой на второй же правке. Поэтому
+   решение предельно простое — одна занятая клетка получает один пропс, слот
+   выбирается равновероятно среди сорока. Первые сорок занятых клеток получают по
+   одному каждому слоту, иначе предпросмотр показывал бы не весь набор, а случайные
+   тридцать девять из сорока. */
+function buildProps(group, tiles) {
+  const map = S.map, M = S.M, rnd = S.rnd;
+  const list = [...tiles.values()].sort((a, b) => a.slot - b.slot);
+  const oneCell = list.filter(t => t.footprint !== 2);
+  const taken = new Uint8Array(map.w * map.h);
+  const bySlot = new Map();
+  let k = 0;
+
+  for (let cy = 0; cy < map.h; cy++) {
+    for (let cx = 0; cx < map.w; cx++) {
+      const i = cy * map.w + cx;
+      if (S.type[i] !== BLOCKED || taken[i]) continue;
+      let t = k < list.length ? list[k] : list[Math.floor(rnd() * list.length)];
+      k++;
+      let ox = 0, oz = 0;
+      if (t.footprint === 2) {
+        const p = pairFor(cx, cy, taken);
+        if (p) {
+          taken[p[1] * map.w + p[0]] = 1;
+          /* Двухклеточный пропс центрируется на границе двух клеток, иначе он
+             целиком свешивается в одну и половиной вылезает наружу. */
+          ox = (p[0] - cx) * CELL / 2; oz = (p[1] - cy) * CELL / 2;
+        } else if (oneCell.length) {
+          /* Свободного соседа нет — берём слот на одну клетку: посадить
+             двухклеточный там, где он ничего не занимает, хуже, чем сузить. */
+          t = oneCell[Math.floor(rnd() * oneCell.length)];
+        }
+      }
+      taken[i] = 1;
+      let place = bySlot.get(t.slot);
+      if (!place) bySlot.set(t.slot, place = []);
+      place.push({
+        x: M.originX + (cx + 0.5) * CELL + ox,
+        z: M.originZ + (cy + 0.5) * CELL + oz,
+        rot: rnd() * Math.PI * 2,
+      });
+    }
+  }
+
+  /* Материал свой и один на все модели: контракт запрещает материалы и текстуры,
+     цвет живёт в COLOR_0. Шероховатость и металличность ставим явно — по умолчанию
+     GLTF даёт metalness 1, и пропы выглядели бы полированным металлом. */
+  for (const [slot, places] of [...bySlot].sort((a, b) => a[0] - b[0])) {
+    const tile = tiles.get(slot);
+    tile.gltf.scene.traverse(o => {
+      if (!o.isMesh) return;
+      const mat = new T.MeshStandardMaterial({
+        vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.35,
+      });
+      const mesh = new T.InstancedMesh(o.geometry, mat, places.length);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.layer = TILE_LAYER[tile.kind] || 'props';
+      mesh.userData.src = 'prop';
+      mesh.userData.slot = slot;
+      mesh.userData.kind = tile.kind;
+      mesh.userData.cellType = 'blocked';
+      for (let i = 0; i < places.length; i++) {
+        const p = places[i];
+        /* Модели NexusModeler считаны в единицах игры, где клетка равна единице.
+           У нас клетка — CELL мировых единиц, поэтому масштаб ровно CELL. */
+        dummy.position.set(p.x, terrainH(p.x, p.z), p.z);
+        dummy.rotation.set(0, p.rot, 0);
+        dummy.scale.setScalar(CELL);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      group.add(mesh);
+    });
+  }
+  let placed = 0;
+  for (const place of bySlot.values()) placed += place.length;
+  return placed;
+}
+
+/* Свободный сосед под второй клетку двухклеточного слота: внутри карты, тоже
+   занятый и ещё не занятый пропсом. Возвращает [cx, cy] или null. */
+function pairFor(cx, cy, taken) {
+  const map = S.map, rnd = S.rnd;
+  for (let n = 0; n < TILE_DIRS.length; n++) {
+    const d = TILE_DIRS[Math.floor(rnd() * TILE_DIRS.length)];
+    const nx = cx + d[0], ny = cy + d[1];
+    if (nx < 0 || ny < 0 || nx >= map.w || ny >= map.h) continue;
+    const j = ny * map.w + nx;
+    if (taken[j] || S.type[j] !== BLOCKED) continue;
+    return [nx, ny];
+  }
+  return null;
+}
 
 /* ══════════════════════════ 3. renderer / сцена ══════════════════════════ */
 
@@ -867,10 +1107,23 @@ function buildScatter() {
   const map = S.map, M = S.M, def = S.ground;
   const rnd = S.rnd;
   const MAX = 26000;
-  let total = 0;
+  let total = 0, procTotal = 0;
+  const props = PROPS.state === 'ready' ? PROPS.sets[S.biome] || null : null;
+
+  /* Нет пропсов — нет и объектов: ни процедурных на занятых клетках, ни вообще.
+     Частичный набор — не «видно, что есть», а ровно тот отказ, о котором задача. */
+  if (propsRefusal(S.biome)) {
+    group.userData.count = 0;
+    group.userData.props = 0;
+    group.userData.procedural = 0;
+    scene.add(group);
+    return group;
+  }
 
   for (const typeKey of ['free', 'road', 'blocked']) {
     const typeVal = typeKey === 'free' ? FREE : typeKey === 'road' ? ROAD : BLOCKED;
+    /* Занятые клетки рисуются пропсами из манифеста — по одному на клетку. */
+    if (typeKey === 'blocked' && props) { total += buildProps(group, props); continue; }
     const specs = (BIOMES[S.biome].scatter || {})[typeKey] || [];
     for (const spec of specs) {
       const bdef = BUILDERS[spec.b];
@@ -910,6 +1163,7 @@ function buildScatter() {
       }
       if (!places.length) continue;
       total += places.length;
+      procTotal += places.length;
 
       /* 2. по одной части — один InstancedMesh */
       const layer = spec.layer || 'props';
@@ -930,6 +1184,8 @@ function buildScatter() {
         mesh.castShadow = spec.shadow !== false && !part.noShadow;
         mesh.receiveShadow = true;
         mesh.userData.layer = layer;
+        mesh.userData.src = 'rule';
+        mesh.userData.cellType = typeKey;
 
         const off = (bdef.offset || {})[part.id];
         const col = new T.Color();
@@ -952,6 +1208,8 @@ function buildScatter() {
     }
   }
   group.userData.count = total;
+  group.userData.props = total - procTotal;
+  group.userData.procedural = procTotal;
   scene.add(group);
   return group;
 }
@@ -975,7 +1233,15 @@ const dummy = new T.Object3D();
        ground       free, road, blocked — по паре цветов #rrggbb на тип клетки
        relief       blockedLift, roadFlatten, roadSink
        light        sky (объект), water (объект или null)
+       tiles        все сорок слотов набора, по порядку номера
        scatter      cell (сторона блока в клетках) и rules[]
+     плитка
+       slot         1…40 — обещание вида, общее для всех наборов
+       kind         tree | bush | rock | debris | ruin | bone
+       footprint    сколько клеток занимает: 1 или 2
+       solid        проходит ли монстр
+       file         имя файла модели — по нему игра найдёт свою копию
+       contentHash  sha256 файла; сверка целостности, не «отпечаток карты»
      правило
        id           уникально внутри файла
        builder      имя объекта — ТОЛЬКО для чтения человеком, игра не ищет
@@ -990,6 +1256,12 @@ const dummy = new T.Object3D();
        float        { часть: [высота, высота] }, пустой если никто не парит
        geometry     null; выгрузка геометрии — отдельная работа
        count        счётчик по блокам scatter.cell × scatter.cell клеток
+
+   `tiles` — структура слотов, которая до сих пор жила текстом контракта в
+   `NexusModeler`. Переезжает сюда, потому что читать её должна игра, а не
+   производитель: имена наборов и моделей остаются его, проверка полноты —
+   наша (`npm run check`). Без `tiles` в файле набор выгружать нельзя: игре
+   нечем рисовать занятые клетки.
 
    Главное здесь — `count`. Игра получает не параметры шума, а готовые числа:
    сколько объектов ждать в блоке SKIN_BLOCK × SKIN_BLOCK клеток. Иначе игре
@@ -1080,7 +1352,24 @@ function skinRule(biomeId, spec, def, cellType, typeVal, taken) {
   };
 }
 
+/* Плитки набора в том виде, в каком их ждёт игра: номер, вид, проходимость и
+   ссылка на файл. Порядок — по номеру слота, он и есть обещание вида. */
+function skinTiles(biomeId) {
+  const tiles = PROPS.sets[biomeId];
+  if (!tiles) return null;
+  return [...tiles.values()].sort((a, b) => a.slot - b.slot).map(t => ({
+    slot: t.slot, kind: t.kind, footprint: t.footprint, solid: t.solid,
+    file: t.file, contentHash: t.contentHash,
+  }));
+}
+
 function exportSkin() {
+  /* Набор без пропсов не выгружается: файл получился бы неполным, и игра взяла
+     бы его, не зная, чем рисовать занятые клетки. Причина одна и та же, что и
+     надпись в предпросмотре, — расходиться они не могут. */
+  const why = propsRefusal(S.biome);
+  if (why) throw new Error(why);
+
   const b = BIOMES[S.biome], map = S.map, taken = new Set(), rules = [];
   const val = { free: FREE, road: ROAD, blocked: BLOCKED };
   for (const cellType of ['free', 'road', 'blocked']) {
@@ -1117,6 +1406,7 @@ function exportSkin() {
       roadSink: b.relief.roadSink || 0,
     },
     light: { sky, water },
+    tiles: skinTiles(S.biome),
     scatter: { cell: SKIN_BLOCK, rules },
   };
 }
@@ -1126,8 +1416,11 @@ const safeName = s => String(s).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^[.-]+
 const skinFileName = () => safeName(BIOMES[S.biome].name) + '.json';
 
 function downloadSkin() {
+  let text;
+  try { text = skinJson(); }
+  catch (e) { showRefuse('Кожу выгрузить нельзя', e.message); return; }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([skinJson()], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   a.download = skinFileName();
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -1379,6 +1672,15 @@ const bPlants = $('bPlants'), bRocks = $('bRocks'), bProps = $('bProps'), bShado
 const lsel = [...document.querySelectorAll('.lsel')];
 const noteEl = $('note'), note2 = $('note2'), statEl = $('stat'), fpsEl = $('fps');
 const mapMeta = $('mapmeta'), dropEl = $('drop');
+const refuseEl = $('refuse'), refuseTitle = $('refuseTitle'), refuseMsg = $('refuseMsg');
+
+const REFUSE_SET = 'Набор не показан';
+function showRefuse(title, msg) {
+  refuseTitle.textContent = title;
+  refuseMsg.textContent = msg;
+  refuseEl.classList.add('on');
+}
+function hideRefuse() { refuseEl.classList.remove('on'); }
 
 /* Список карт в окне выбора: встроенные демо и всё, что взято из папки.
    POOL отделён от DEMO, чтобы «встроенные» остались именно встроенными. */
@@ -1394,6 +1696,16 @@ DEMO.forEach(mapOption);
 BIOME_KEYS.forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = BIOMES[k].name; selBiome.appendChild(o); });
 selBiome.value = S.biome;
 
+/* Причина отказа на весь экран и в заголовке кнопки выгрузки. Одна функция на
+   предпросмотр и на выгрузку — иначе они рано или поздно скажут разное. */
+function paintPropsNotice() {
+  const why = propsRefusal(S.biome);
+  if (why) showRefuse(REFUSE_SET, why); else hideRefuse();
+  bSkin.title = why ? 'Кожу этого набора выгрузить нельзя: ' + why
+                    : 'Выгрузить набор оформления и текущую карту одним JSON';
+  return why;
+}
+
 function paintUI() {
   const map = S.map, n = map.w * map.h;
   mapMeta.textContent = map.name + ' · ' + map.w + '×' + map.h;
@@ -1403,8 +1715,15 @@ function paintUI() {
     note += '<br>не отнесены к типам → свободная: ' + S.unassigned.map(g => '&quot;' + esc(g) + '&quot;').join(' ');
   }
   noteEl.innerHTML = note;
-  note2.innerHTML = '<b style="color:#cfdae2">' + BIOMES[S.biome].name + '</b><br>' + BIOMES[S.biome].note;
-  statEl.innerHTML = 'объектов <b>' + (scatter ? scatter.userData.count : 0) + '</b> · сборка <b>' + S.buildMs + ' мс</b>';
+  /* Отказ виден и в панели, и во весь экран: надписью по центру сцены её видно
+     без панели, а причиной в панели — когда панель открыта и сцена сбоку. */
+  const why = paintPropsNotice();
+  note2.innerHTML = '<b style="color:#cfdae2">' + BIOMES[S.biome].name + '</b><br>' + BIOMES[S.biome].note +
+    (why ? '<br><span style="color:#ffb3a4">' + esc(why) + '</span>' : '');
+  const props = scatter ? scatter.userData.props || 0 : 0;
+  statEl.innerHTML = 'объектов <b>' + (scatter ? scatter.userData.count : 0) + '</b>' +
+    (props ? ' · пропсов <b>' + props + '</b>' : '') +
+    ' · сборка <b>' + S.buildMs + ' мс</b>';
   for (const s of lsel) {
     const t = +s.dataset.t;
     s.innerHTML = '';
@@ -1579,13 +1898,35 @@ function boot() {
   requestAnimationFrame(() => l.classList.add('gone'));
 }
 
+/* ── пропсы для отчёта и тестов ── */
+function propsReport() {
+  const sets = {};
+  for (const [id, tiles] of Object.entries(PROPS.sets)) {
+    sets[id] = [...tiles.values()].sort((a, b) => a.slot - b.slot).map(t => ({
+      slot: t.slot, kind: t.kind, footprint: t.footprint, solid: t.solid,
+      file: t.file, contentHash: t.contentHash, url: t.url, loaded: !!t.gltf,
+    }));
+  }
+  return { state: PROPS.state, reason: PROPS.reason, sets };
+}
+
 window.BURROW = { T, scene, camera, renderer, controls, S, BIOMES, BUILDERS, DEMO,
                   terrainH, loadMap, rebuild, setBiome: id => { selBiome.value = id; selBiome.onchange(); },
                   /* выгрузка кожи: экспортёром пользуется и кнопка, и npm run export,
                      поэтому расходиться им негде */
-                  exportSkin, skinJson, skinFileName, mapFingerprint, CELL, SKIN_BLOCK, SKIN_VERSION };
+                  exportSkin, skinJson, skinFileName, mapFingerprint, CELL, SKIN_BLOCK, SKIN_VERSION,
+                  /* пропсы: состояние, причина отказа и состав наборов */
+                  PROPS, TILE_SLOTS, TILE_KINDS, TILE_SOLID, loadProps, propsRefusal, propsReport,
+                  scatter: () => scatter };
 
-requestAnimationFrame(() => requestAnimationFrame(boot));
+async function bootWithProps() {
+  const lmsg = $('lmsg');
+  await loadProps((done, total) => { if (lmsg) lmsg.textContent = 'Загрузка пропсов… ' + done + ' из ' + total; });
+  if (lmsg) lmsg.textContent = 'Генерация местности…';
+  boot();
+}
+
+requestAnimationFrame(() => requestAnimationFrame(bootWithProps));
 </script>
 </body>
 </html>

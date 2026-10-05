@@ -7,6 +7,11 @@
    Экспортёру нужна карта: densities считаются по типам клеток, а не по данным
    набора. Берём первую встроенную карту — она всегда есть, и её размер известен.
 
+   Отказ — законный исход, а не поломка: набор без пропсов выгрузить нельзя,
+   игре нечем рисовать занятые клетки. Такие наборы печатаются с причиной и
+   пропускаются, а каталог переписывается целиком — иначе в нём остался бы
+   скин набора, для которого пропсов уже нет.
+
    Нужен Playwright (он и так devDependency ради тестов). Рантайм-зависимостей
    у приложения по-прежнему нет. */
 
@@ -41,23 +46,33 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     const biomes = await page.evaluate(() => Object.keys(window.BURROW.BIOMES));
     console.log(`карта ${map.name} ${map.w}×${map.h}, наборов: ${biomes.length}`);
 
+    fs.rmSync(OUT, { recursive: true, force: true });
     fs.mkdirSync(OUT, { recursive: true });
+    let written = 0;
     for (const id of biomes) {
       const frame = await page.evaluate(() => window.BURROW.renderer.info.render.frame);
       await page.evaluate(b => window.BURROW.setBiome(b), id);
       await page.waitForFunction(f => window.BURROW.renderer.info.render.frame > f + 3, frame, { timeout: 60_000 });
-      const skin = await page.evaluate(() => ({
-        name: window.BURROW.S.biome,
-        file: window.BURROW.skinFileName(),
-        text: window.BURROW.skinJson(),
-      }));
+      const skin = await page.evaluate(() => {
+        try {
+          return { ok: true, name: window.BURROW.S.biome, file: window.BURROW.skinFileName(), text: window.BURROW.skinJson() };
+        } catch (e) {
+          return { ok: false, name: window.BURROW.S.biome, reason: e.message };
+        }
+      });
+      if (!skin.ok) { console.log(`  ${id.padEnd(10)} отказ: ${skin.reason}`); continue; }
       fs.writeFileSync(path.join(OUT, skin.file), skin.text, 'utf8');
-      const rules = JSON.parse(skin.text).scatter.rules.length;
-      console.log(`  ${skin.file.padEnd(22)} ${(skin.text.length / 1024).toFixed(1)} КБ, правил: ${rules}`);
+      const data = JSON.parse(skin.text);
+      written++;
+      console.log(`  ${skin.file.padEnd(22)} ${(skin.text.length / 1024).toFixed(1)} КБ, ` +
+                  `правил: ${data.scatter.rules.length}, плиток: ${data.tiles.length}`);
     }
 
     if (errors.length) { console.error('ошибки страницы:', errors); process.exit(1); }
-    console.log(`готово: dist/skins/ (${biomes.length} файлов)`);
+    console.log(`готово: dist/skins/ — выгружено ${written} из ${biomes.length} наборов`);
+    if (written !== biomes.length) {
+      console.log('остальные отказали: у наборов без пропсов кожу выгружать нельзя, причина выше');
+    }
   } finally {
     if (browser) await browser.close();
     srv.kill();

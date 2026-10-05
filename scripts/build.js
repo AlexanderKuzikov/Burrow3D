@@ -3,7 +3,7 @@
    `node scripts/build.js` → `dist/burrow3d.html`
 
    Идея: исходники не меняются. Сборщик берёт `index.html` и подставляет в него
-   `maps.js`, `biomes.js` и three.js. Единственный источник правды остаётся
+   `maps.js`, `biomes.js`, three.js и пропсы. Единственный источник правды остаётся
    `index.html` — «четвёртого» файла приложения не появляется.
 
    three.js вкладывается как `data:`-URL в importmap. Это проверено на `file://`:
@@ -11,6 +11,11 @@
    модулей в один (срезать `export`, заменить `import` на деструктуризацию)
    дала бы файл на 500 КБ меньше, но требует правки исходников three.js, а они
    чужие и меняются с каждой версией.
+
+   Пропсы вкладываются так же: `props/` на `file://` прочитать нельзя (fetch
+   заблокирован), а артефакт должен открываться двойным кликом. Манифест едет
+   строкой и разбирается тем же кодом, что и скачанный, — второго пути разбора
+   манифеста не появляется.
 
    Правило сборщика: каждая подстановка обязана состояться ровно один раз,
    иначе сборка падает. Молчаливый промах означал бы тихо нерабочий артефакт.
@@ -23,16 +28,18 @@ const https = require('https');
 
 const ROOT = path.join(__dirname, '..');
 const VENDOR = path.join(__dirname, 'vendor');
+const PROPS = path.join(ROOT, 'props');
 const DIST = path.join(ROOT, 'dist');
 const OUT_FILE = path.join(DIST, 'burrow3d.html');
 
 const THREE_VERSION = '0.169.0';
 const CDN = `https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}`;
-/* Ровно эти три файла и нужны: импорты движка перечислены в шапке index.html. */
+/* Ровно эти файлы и нужны: импорты движка перечислены в шапке index.html. */
 const VENDOR_FILES = {
   'three.module.js': `${CDN}/build/three.module.js`,
   'OrbitControls.js': `${CDN}/examples/jsm/controls/OrbitControls.js`,
   'BufferGeometryUtils.js': `${CDN}/examples/jsm/utils/BufferGeometryUtils.js`,
+  'GLTFLoader.js': `${CDN}/examples/jsm/loaders/GLTFLoader.js`,
 };
 
 /* ── подстановки ─────────────────────────────────────────────────────────── */
@@ -53,6 +60,42 @@ const inlineSafe = src => src.replace(/<\/script/gi, '<\\/script');
 const dataUrl = name =>
   'data:text/javascript;base64,' +
   fs.readFileSync(path.join(VENDOR, name)).toString('base64');
+
+/* Единственное место, где правим чужой исходник: см. ниже в подстановке importmap. */
+function gltfLoaderUrl() {
+  const src = fs.readFileSync(path.join(VENDOR, 'GLTFLoader.js'), 'utf8');
+  const from = `from '../utils/BufferGeometryUtils.js'`;
+  const to = `from 'three/addons/utils/BufferGeometryUtils.js'`;
+  const n = src.split(from).length - 1;
+  if (n !== 1) {
+    throw new Error(`GLTFLoader.js: ожидался 1 относительный импорт BufferGeometryUtils, ` +
+                    `найден ${n} — three обновился, правь сборщик`);
+  }
+  return 'data:text/javascript;base64,' + Buffer.from(src.split(from).join(to), 'utf8').toString('base64');
+}
+
+/* Пропсы для артефакта: манифест строкой (разбирает тот же код, что и скачанный)
+   и файлы как `data:`-URL. Прописать их имёнем нельзя — на `file://` GLTFLoader
+   до файла не дотянется, и набор «Лес-Поле» вышел бы пустым ровно в том файле,
+   который отдают заказчику. */
+function propsBlob() {
+  const manifest = path.join(PROPS, 'manifest.json');
+  if (!fs.existsSync(manifest)) {
+    throw new Error('props/manifest.json нет — выполни `npm run props`, иначе артефакт получится без пропсов');
+  }
+  let m;
+  try { m = JSON.parse(fs.readFileSync(manifest, 'utf8')); }
+  catch (e) { throw new Error('props/manifest.json не читается как JSON: ' + e.message); }
+  const files = {};
+  let missing = 0;
+  for (const entry of m.models || []) {
+    const f = path.join(PROPS, entry.file);
+    if (!fs.existsSync(f)) { console.error(`warn  пропса нет на диске: ${entry.file}`); missing++; continue; }
+    files[entry.file] = 'data:model/gltf-binary;base64,' + fs.readFileSync(f).toString('base64');
+  }
+  if (missing) throw new Error(`пропсов на диске не хватает: файлов ${missing} — выполни npm run props`);
+  return { manifest: fs.readFileSync(manifest, 'utf8'), files };
+}
 
 /* ── вендор ──────────────────────────────────────────────────────────────── */
 
@@ -99,24 +142,39 @@ function build() {
   out = replaceOnce(out, /<script src="biomes\.js"><\/script>/,
     `<script>\n${inlineSafe(read('biomes.js'))}\n</script>`, 'подстановка biomes.js');
 
-  /* 2. importmap: three и оба аддона как data:-URL. Аддоны адресуются точно
+  /* 2. Пропсы. Классический скрипт перед модулем: window.BURROW_PROPS обязан
+        существовать до первого обращения, а module отложен. */
+  const props = propsBlob();
+  const np = Object.keys(props.files).length;
+  out = replaceOnce(out, /<script type="module">/,
+    `<script>window.BURROW_PROPS = ${inlineSafe(JSON.stringify(props))};</script>\n<script type="module">`,
+    'вставка пропсов');
+  console.log(`  пропсы внутри: ${np} файлов, ${(Object.values(props.files)
+    .reduce((s, u) => s + u.length, 0) / 1048576).toFixed(2)} МБ`);
+
+  /* 3. importmap: three и оба аддона как data:-URL. Аддоны адресуются точно
         теми путями, которыми их импортирует движок, — префиксное сопоставление
         не годится, к data:-URL нельзя относительно достроить путь. */
   const imports = {
     'three': dataUrl('three.module.js'),
     'three/addons/controls/OrbitControls.js': dataUrl('OrbitControls.js'),
     'three/addons/utils/BufferGeometryUtils.js': dataUrl('BufferGeometryUtils.js'),
+    /* GLTFLoader тянет относительный импорт ../utils/BufferGeometryUtils.js, и к
+       его data:-URL относительно ничего не достроить — такой импорт упадёт.
+       Перевешиваем его на тот же точный путь, что и у движка: ровно один импорт,
+       иначе сборка падает, а не оставляет тихо нерабочий артефакт. */
+    'three/addons/loaders/GLTFLoader.js': gltfLoaderUrl(),
   };
   out = replaceOnce(out, /<script type="importmap">[\s\S]*?<\/script>/,
     `<script type="importmap">${JSON.stringify({ imports })}</script>`, 'подстановка importmap');
 
-  /* 3. Сторож загрузки three.js с CDN в автономном файле бесполезен: сети нет,
+  /* 4. Сторож загрузки three.js с CDN в автономном файле бесполезен: сети нет,
         и «не загрузилось с CDN» обманчиво. Сам `__MAP_READY = false` нужен —
         на нём ждут автотесты. */
   out = replaceOnce(out, /setTimeout\(function \(\) \{[\s\S]*?\}, 9000\);\n?/,
     '', 'удаление сторожа CDN');
 
-  /* 4. Сборка в шапке: сообщение про исходники должно быть верным и там,
+  /* 5. Сборка в шапке: сообщение про исходники должно быть верным и там,
         где их нет. */
   out = replaceOnce(out, /'maps\.js не загрузился'/,
     `'maps.js не загрузился или не вложен сборкой'`, 'текст ошибки карт');

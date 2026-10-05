@@ -45,11 +45,25 @@ test.describe('Burrow3D', () => {
         if (o.isMesh && o.material.map && !terrain) terrain = o;
         if (o.isMesh && o.material.isMeshPhysicalMaterial) water = o;
       });
+      const tiles = B.propsReport().sets[B.S.biome] || [];
+      let propMeshes = 0, procBlocked = 0;
+      const slots = new Set();
+      B.scene.traverse(o => {
+        if (!o.isInstancedMesh) return;
+        if (o.userData.src === 'prop') { propMeshes++; slots.add(o.userData.slot); }
+        if (o.userData.src === 'rule' && o.userData.cellType === 'blocked') procBlocked++;
+      });
       return {
         objects: B.scene.children.find(o => o.isGroup)?.userData.count ?? 0,
+        props: B.scene.children.find(o => o.isGroup)?.userData.props ?? 0,
         instanced, hasTerrain: !!terrain, hasWater: !!water,
         cells: B.S.map.w * B.S.map.h,
         counts: B.S.counts.reduce((a, b) => a + b, 0),
+        propTiles: tiles.length,
+        loaded: tiles.every(t => t.loaded),
+        propMeshes, procBlocked,
+        slots: [...slots].sort((a, b) => a - b),
+        refusal: B.propsRefusal(B.S.biome),
       };
     });
 
@@ -58,6 +72,14 @@ test.describe('Burrow3D', () => {
     expect(info.hasTerrain).toBe(true);
     expect(info.objects).toBeGreaterThan(0);
     expect(info.instanced).toBeGreaterThan(0);
+    /* лес — набор с пропсами: на занятых клетках модели из манифеста,
+       процедурным там делать нечего */
+    expect(info.refusal).toBe('');
+    expect(info.propTiles).toBe(40);
+    expect(info.loaded).toBe(true);
+    expect(info.propMeshes).toBe(40);
+    expect(info.procBlocked).toBe(0);
+    expect(info.slots.length).toBe(40);            // видны все сорок слотов
     expect(errors).toEqual([]);
   });
 
@@ -76,6 +98,32 @@ test.describe('Burrow3D', () => {
       const current = await page.evaluate(() => window.BURROW.S.biome);
       expect(current).toBe(id);
     }
+    /* Шесть наборов без пропсов — с внятной причиной, а не сценой с другими
+       объектами: откат на процедурные вернул бы то расхождение, которое мы закрываем. */
+    const withProps = await page.evaluate(() => Object.keys(window.BURROW.propsReport().sets));
+    const bad = [];
+    for (const id of ids) {
+      await page.evaluate(b => window.BURROW.setBiome(b), id);
+      await page.waitForTimeout(120);
+      const r = await page.evaluate(() => {
+        const B = window.BURROW;
+        let n = 0;
+        B.scene.traverse(o => { if (o.isInstancedMesh) n++; });
+        return {
+          refusal: B.propsRefusal(B.S.biome),
+          meshes: n,
+          overlay: document.getElementById('refuse').classList.contains('on'),
+          msg: document.getElementById('refuseMsg').textContent,
+        };
+      });
+      const hasProps = withProps.includes(id);
+      if (hasProps && r.refusal) bad.push(`${id}: пропсы есть, но отказ «${r.refusal}»`);
+      if (!hasProps && !r.refusal) bad.push(`${id}: пропсов нет, но отказа нет`);
+      if (!hasProps && r.meshes) bad.push(`${id}: пропсов нет, но объектов на экране ${r.meshes}`);
+      if (!hasProps && !r.overlay) bad.push(`${id}: отказа не видно в предпросмотре`);
+      if (!hasProps && r.msg !== r.refusal) bad.push(`${id}: надпись «${r.msg}» ≠ причине «${r.refusal}»`);
+    }
+    expect(bad, '\n  ' + bad.join('\n  ')).toEqual([]);
     expect(errors).toEqual([]);
   });
 
@@ -105,6 +153,19 @@ test.describe('Burrow3D', () => {
       expect(info.sum).toBe(info.cells);
       expect(info.unique).toBe(3);                 // три различных символа в легенде
     }
+    /* Пропсы стоят только на занятых клетках: по одному на клетку, двухклеточные
+       занимают пару — значит пропсов не больше, чем занятых клеток. */
+    const props = await page.evaluate(() => {
+      const B = window.BURROW;
+      let blocked = 0;
+      for (let i = 0; i < B.S.type.length; i++) if (B.S.type[i] === 2) blocked++;
+      let placed = 0;
+      B.scene.traverse(o => { if (o.isGroup && o.userData.props) placed = o.userData.props; });
+      return { biome: B.S.biome, blocked, placed };
+    });
+    expect(props.biome).toBe('forest');
+    expect(props.placed).toBeGreaterThan(0);
+    expect(props.placed, 'пропсов больше, чем занятых клеток').toBeLessThanOrEqual(props.blocked);
     expect(errors).toEqual([]);
   });
 
@@ -318,19 +379,42 @@ test.describe('Burrow3D', () => {
     const errors = collectErrors(page);
     await boot(page, errors);
 
-    /* 96×96 — худший случай по размеру сетки плотностей: 12×12 блоков на
-       правило, и карта не делится на 8 без остатка. */
+    /* 96×96 — худший случай по размеру сетки счётчиков: 24×24 блоков на
+       правило, и карта не делится на 4 без остатка. */
     const size = await page.evaluate(() => ({ w: window.BURROW.S.map.w, h: window.BURROW.S.map.h }));
     expect(size.w).toBe(96);
     expect(size.h).toBe(96);
 
     const ids = await page.evaluate(() => Object.keys(window.BURROW.BIOMES));
     const report = [];
+    const refusals = [];
 
     for (const id of ids) {
       const frame = await page.evaluate(() => window.BURROW.renderer.info.render.frame);
       await page.evaluate(b => window.BURROW.setBiome(b), id);
       await page.waitForFunction(f => window.BURROW.renderer.info.render.frame > f + 3, frame, { timeout: 60_000 });
+
+      const hasProps = await page.evaluate(b => (window.BURROW.propsReport().sets[b] || []).length, id);
+      if (!hasProps) {
+        /* Набор без пропсов: выгрузка отказывает с внятной причиной по имени
+           набора и по числу недостающих слотов — неполный файл не выгружается. */
+        const r = await page.evaluate(() => {
+          const B = window.BURROW;
+          let reason;
+          try { B.skinJson(); reason = 'ОТКАЗА НЕТ'; }
+          catch (e) { reason = e.message; }
+          return {
+            reason,
+            overlay: document.getElementById('refuseMsg').textContent,
+          };
+        });
+        expect(r.reason, `${id}: отказа выгрузки нет`).not.toBe('ОТКАЗА НЕТ');
+        expect(r.reason).toContain(id);            // причина называет набор
+        expect(r.reason).toContain('40 слотов из 40');
+        expect(r.overlay, `${id}: в предпросмотре не видна причина`).toBe(r.reason);
+        refusals.push(`${id}: ${r.reason.split(';')[0]}…`);
+        continue;
+      }
 
       const r = await page.evaluate(() => {
         const B = window.BURROW, S = B.S;
@@ -347,6 +431,24 @@ test.describe('Burrow3D', () => {
         if (skin.map.width !== S.map.w || skin.map.height !== S.map.h) bad.push('map.width/height');
         if (skin.map.fingerprint !== B.mapFingerprint(S.map)) bad.push('map.fingerprint');
         if (skin.scatter.cell !== B.SKIN_BLOCK) bad.push('scatter.cell');
+
+        /* плитки: все сорок слотов манифеста, номер и файл совпадают */
+        const manifest = (B.propsReport().sets[S.biome] || []);
+        if (!Array.isArray(skin.tiles) || skin.tiles.length !== B.TILE_SLOTS) {
+          bad.push('tiles длиной ' + (skin.tiles && skin.tiles.length));
+        } else {
+          const want = new Map(manifest.map(t => [t.slot, t]));
+          for (const t of skin.tiles) {
+            const src = want.get(t.slot);
+            if (!src) { bad.push('плитка ' + t.slot + ': слота нет в манифесте'); continue; }
+            if (t.file !== src.file) bad.push('плитка ' + t.slot + ': файл «' + t.file + '» против «' + src.file + '»');
+            if (t.contentHash !== src.contentHash) bad.push('плитка ' + t.slot + ': contentHash разошёлся');
+            if (t.kind !== src.kind || t.footprint !== src.footprint || t.solid !== src.solid) {
+              bad.push('плитка ' + t.slot + ': вид разошёлся с манифестом');
+            }
+          }
+        }
+
         const gw = Math.ceil(S.map.w / B.SKIN_BLOCK), gh = Math.ceil(S.map.h / B.SKIN_BLOCK);
 
         let sumCount = 0;
@@ -366,35 +468,69 @@ test.describe('Burrow3D', () => {
             }
           }
           if (rule.count.length !== gw * gh) bad.push(at + ': count длиной ' + rule.count.length);
+          /* На занятых клетках рисуются пропсы, а не процедурные объекты, —
+             поэтому счётчики процедурных правил сверяем только там, где они
+             рисуются: на свободных и на дороге. */
+          if (rule.cellType === 'blocked') continue;
           for (const v of rule.count) {
             if (!(v >= 0)) { bad.push(at + ': счётчик вне 0..'); break; }
             sumCount += v;
           }
         }
         /* числа, о которых просит приёмка: ожидание из файла и реальность на экране */
-        let placed = 0;
-        B.scene.traverse(o => { if (o.isGroup) placed += o.userData.count || 0; });
-        return { biome: S.biome, bad, sumCount: Math.round(sumCount), placed, bytes: a.length };
+        let placed = 0, props = 0;
+        const slots = new Set();
+        B.scene.traverse(o => {
+          if (o.isGroup) { placed += o.userData.count || 0; props += o.userData.props || 0; }
+          if (o.isInstancedMesh && o.userData.src === 'prop') slots.add(o.userData.slot);
+        });
+        return { biome: S.biome, bad, sumCount: Math.round(sumCount), placed, props,
+                 procedural: placed - props, tiles: skin.tiles.length,
+                 slots: [...slots].sort((a, b) => a - b), bytes: a.length };
       });
 
-      report.push(`${r.biome}: счётчики ${r.sumCount}, на экране ${r.placed} (${r.bytes} Байт)`);
+      report.push(`${r.biome}: счётчики ${r.sumCount}, процедурных на экране ${r.procedural}, ` +
+                  `пропсов ${r.props}, плиток ${r.tiles} (${r.bytes} Байт)`);
       expect(r.bad, `${r.biome}: ${r.bad.join('; ')}`).toEqual([]);
+      expect(r.slots.length, `${r.biome}: на экране не все сорок слотов`).toBe(40);
       /* сумма счётчиков — ожидание того же самого расчёта, поэтому обязана
          попадать в фактическое число объектов, а не просто «того же порядка» */
-      expect(r.sumCount, `${r.biome}: счётчики ${r.sumCount} против ${r.placed} объектов`)
-        .toBeGreaterThan(r.placed * 0.85);
-      expect(r.sumCount, `${r.biome}: счётчики ${r.sumCount} против ${r.placed} объектов`)
-        .toBeLessThan(r.placed * 1.15);
+      expect(r.sumCount, `${r.biome}: счётчики ${r.sumCount} против ${r.procedural} процедурных`)
+        .toBeGreaterThan(r.procedural * 0.85);
+      expect(r.sumCount, `${r.biome}: счётчики ${r.sumCount} против ${r.procedural} процедурных`)
+        .toBeLessThan(r.procedural * 1.15);
     }
 
     console.log('\n  сумма счётчиков против объектов на экране (карта 96×96):');
     for (const line of report) console.log('    ' + line);
-    expect(report.length).toBe(ids.length);
+    console.log('  отказы выгрузки:');
+    for (const line of refusals) console.log('    ' + line);
+    expect(report.length + refusals.length).toBe(ids.length);
+    expect(refusals.length).toBe(ids.length - 1);   // выгружается только набор с пропсами
     expect(errors).toEqual([]);
+
+    /* Пропсы проверены именем и хэшем, а не на глаз: в браузере скачиваем каждый
+       файл и сверяем sha256 с contentHash из манифеста. */
+    const hashes = await page.evaluate(async () => {
+      const manifest = (window.BURROW.propsReport().sets.forest || []);
+      const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+      const bad = [];
+      for (const t of manifest) {
+        const res = await fetch(t.url);
+        const buf = await res.arrayBuffer();
+        const got = 'sha256:' + hex(await crypto.subtle.digest('SHA-256', buf));
+        if (got !== t.contentHash) bad.push(t.file + ': на диске ' + got.slice(7, 23) + '…');
+      }
+      return { n: manifest.length, bad };
+    });
+    expect(hashes.n).toBe(40);
+    expect(hashes.bad, 'contentHash разошёлся:\n  ' + hashes.bad.join('\n  ')).toEqual([]);
 
     /* кнопка «Выгрузить кожу» — то, чем владелец пользуется на самом деле,
        поэтому проверяем её целиком: имя файла из имени набора и побайтовое
        совпадение содержимого с тем, что отдаёт экспортёр */
+    await page.evaluate(() => window.BURROW.setBiome('forest'));
+    await page.waitForTimeout(200);
     const want = await page.evaluate(() => ({ file: window.BURROW.skinFileName(), text: window.BURROW.skinJson() }));
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 30_000 }),
@@ -435,14 +571,22 @@ test.describe('Burrow3D', () => {
         if (o.isInstancedMesh) instanced++;
         if (o.isMesh && o.material.map) terrain = true;
       });
+      const tiles = (B.propsReport().sets.forest || []);
       return { maps: B.DEMO.length, biomes: Object.keys(B.BIOMES).length, instanced, terrain,
-               skinRules: B.exportSkin().scatter.rules.length };
+               skinRules: B.exportSkin().scatter.rules.length,
+               skinTiles: B.exportSkin().tiles.length,
+               propTiles: tiles.length, loaded: tiles.every(t => t.loaded) };
     });
     expect(info.maps).toBeGreaterThanOrEqual(3);      // карты вложены в файл
     expect(info.biomes).toBeGreaterThanOrEqual(7);    // наборы вложены в файл
     expect(info.terrain).toBe(true);
     expect(info.instanced).toBeGreaterThan(0);
     expect(info.skinRules, 'выгрузка кожи должна работать и в собранном файле').toBeGreaterThan(0);
+    /* пропсы вложены в файл: по file:// их не скачать, и без вставки артефакт
+       открывался бы с пустым «Лесом-Полем» */
+    expect(info.propTiles).toBe(40);
+    expect(info.loaded).toBe(true);
+    expect(info.skinTiles).toBe(40);
     expect(external, 'артефакт ходит в сеть: ' + external.join(', ')).toEqual([]);
     expect(errors).toEqual([]);
   });
